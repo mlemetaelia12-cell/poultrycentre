@@ -1,0 +1,22 @@
+import { desc } from "drizzle-orm";
+import { ShieldCheck, UserPlus, UsersRound } from "lucide-react";
+import { getDb } from "@/db";
+import { users } from "@/db/schema";
+import { ActionForm } from "@/components/action-form";
+import { createStaffAction, setStaffActiveAction } from "@/lib/actions";
+import { DataTable } from "@/components/data-table";
+import { PageHeader } from "@/components/page-header";
+import { dateTime } from "@/lib/format";
+import { requireUser } from "@/lib/auth";
+
+export default async function StaffPage() {
+  const actor = await requireUser();
+  const rows = await getDb().select({ id: users.id, displayName: users.displayName, username: users.username, role: users.role, lastLoginAt: users.lastLoginAt, createdAt: users.createdAt, active: users.active }).from(users).orderBy(desc(users.createdAt));
+  return <>
+    <PageHeader title="Staff & access control" description="Individual staff accounts, role-based server permissions, account activation and access history. Never share logins." />
+    {actor.role === "owner" && <section className="card mb-5 p-4 sm:p-6"><div className="mb-4 flex items-center gap-2"><UserPlus size={18} className="text-forest-700" /><div><h2 className="section-title">Create staff account</h2><p className="section-subtitle">Use a temporary password with at least 12 characters. Staff must change it after signing in for the first time.</p></div></div><ActionForm action={createStaffAction} submitLabel="Create account" className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4"><div><label className="field-label">Display name *</label><input name="displayName" required className="field" /></div><div><label className="field-label">Username *</label><input name="username" required minLength={3} maxLength={40} pattern="[A-Za-z0-9._-]+" className="field" /></div><div><label className="field-label">Temporary password *</label><input name="password" required type="password" minLength={12} autoComplete="new-password" className="field" /></div><div><label className="field-label">Role *</label><select name="role" className="field"><option value="cashier">Cashier</option><option value="stock_attendant">Stock Attendant</option><option value="manager">Manager</option></select></div></ActionForm></section>}
+    <div className="mb-3 flex items-center gap-2"><UsersRound size={18} className="text-forest-700" /><h2 className="section-title">Accounts ({rows.length})</h2></div>
+    <div className="table-wrap"><table className="data-table"><thead><tr><th>Staff member</th><th>Username</th><th>Role</th><th>Last login</th><th>Created</th><th>Status</th>{actor.role === "owner" && <th>Account action</th>}</tr></thead><tbody>{rows.map((row) => <tr key={row.id}><td className="font-semibold">{row.displayName}</td><td>{row.username}</td><td className="capitalize">{row.role.replaceAll("_", " ")}</td><td>{dateTime(row.lastLoginAt)}</td><td>{dateTime(row.createdAt)}</td><td><span className={`badge ${row.active ? "badge-green" : "badge-red"}`}>{row.active ? "Active" : "Disabled"}</span></td>{actor.role === "owner" && <td>{row.role === "owner" || actor.id === row.id ? <span className="text-xs text-slate-400">Protected</span> : <form action={setStaffActiveAction}><input type="hidden" name="userId" value={row.id} /><input type="hidden" name="active" value={String(!row.active)} /><button className={`text-xs font-semibold ${row.active ? "text-red-600" : "text-forest-700"}`}>{row.active ? "Disable account" : "Activate account"}</button></form>}</td>}</tr>)}</tbody></table></div>
+    <div className="mt-5 rounded-xl border border-forest-100 bg-forest-50 p-4"><div className="flex items-center gap-2 text-sm font-bold text-forest-900"><ShieldCheck size={18} /> Permission overview</div><div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4 text-xs leading-5 text-forest-900"><p><strong>Owner:</strong> full business access, finances, settings, staff and audit.</p><p><strong>Manager:</strong> daily operations, reports, controlled adjustments and discount approval; cannot manage owner settings.</p><p><strong>Cashier:</strong> POS, customers, debt repayments, receipts and own cashier shifts.</p><p><strong>Stock attendant:</strong> products, receiving and stock tasks; cannot remove stock without manager/owner approval.</p></div><p className="mt-3 text-[11px] text-forest-800">Role checks are enforced on the server for every write action; hiding a button is not treated as authorization.</p></div>
+  </>;
+}
