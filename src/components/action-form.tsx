@@ -1,17 +1,26 @@
 "use client";
 
-import { useActionState, type ReactNode } from "react";
+import { useActionState, useEffect, useRef, useState, type ReactNode } from "react";
 import type { ActionState } from "@/lib/actions";
 
 type Action = (state: ActionState, formData: FormData) => Promise<ActionState>;
 
-export function ActionForm({ action, children, submitLabel = "Save", className = "" }: { action: Action; children: ReactNode; submitLabel?: string; className?: string }) {
+export function ActionForm({ action, children, submitLabel = "Save", className = "", idempotency = false }: { action: Action; children: ReactNode; submitLabel?: string; className?: string; idempotency?: boolean }) {
   const [state, formAction, pending] = useActionState(action, {} as ActionState);
+  const [idempotencyKey, setIdempotencyKey] = useState("");
+  const formRef = useRef<HTMLFormElement>(null);
+  useEffect(() => { if (idempotency) setIdempotencyKey(crypto.randomUUID()); }, [idempotency]);
+  useEffect(() => {
+    if (!state.success) return;
+    formRef.current?.reset();
+    if (idempotency) setIdempotencyKey(crypto.randomUUID());
+  }, [state.success, idempotency]);
   return (
-    <form action={formAction} className={className}>
+    <form ref={formRef} action={formAction} className={className}>
+      {idempotency && <input type="hidden" name="idempotencyKey" value={idempotencyKey} />}
       {children}
       {(state.error || state.success) && <p role="status" className={`mt-3 rounded-xl px-3 py-2 text-sm ${state.error ? "bg-red-50 text-red-700" : "bg-emerald-50 text-emerald-800"}`}>{state.error ?? state.success}</p>}
-      <button type="submit" disabled={pending} className="mt-4 inline-flex min-h-11 items-center justify-center rounded-xl bg-forest-700 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-forest-800 disabled:cursor-not-allowed disabled:opacity-60">{pending ? "Saving…" : submitLabel}</button>
+      <button type="submit" disabled={pending || (idempotency && !idempotencyKey)} className="mt-4 inline-flex min-h-11 items-center justify-center rounded-xl bg-forest-700 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-forest-800 disabled:cursor-not-allowed disabled:opacity-60">{pending ? "Saving…" : submitLabel}</button>
     </form>
   );
 }

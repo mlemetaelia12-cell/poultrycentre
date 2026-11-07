@@ -1,4 +1,4 @@
-import { and, desc, eq, sql } from "drizzle-orm";
+import { desc, eq, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import { batches, customers, debtTransactions, expenses, products, sales } from "@/db/schema";
 import { requireFullAccess } from "@/lib/auth";

@@ -5,6 +5,7 @@ import type { SessionUser } from "@/lib/types";
 import { Sidebar } from "./sidebar";
 import { Mark } from "./logo";
 import { getLocale, t } from "@/i18n/messages";
+import { FloatingAI } from "@/components/ai/floating-ai";
 
 export async function AppShell({ user, children }: { user: SessionUser; children: ReactNode }) {
   const locale = await getLocale();
@@ -20,6 +21,7 @@ export async function AppShell({ user, children }: { user: SessionUser; children
         {dashboardOnly && <div className="mx-4 mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900 sm:mx-7"><strong>{t(locale, "mobileReadOnly")}.</strong> {t(locale, "desktopRequired")} No editing or recording is available in this session.</div>}
         <main className="mx-auto w-full max-w-[1600px] px-4 py-6 sm:px-7 sm:py-8">{children}</main>
         <footer className="px-7 pb-6 text-center text-[11px] text-slate-400 lg:hidden">Built by Brell · POULTRY CENTRE</footer>
+        <FloatingAI locale={locale} />
       </div>
     </div>
   );

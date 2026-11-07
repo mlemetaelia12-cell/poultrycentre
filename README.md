@@ -14,7 +14,8 @@ A private, single-shop veterinary and poultry medicines business-management appl
 - Expenses, sales reports, collections, COGS, profit, stock valuation and potential dead-stock reporting.
 - Internal receipts with 80 mm and A4 print layouts; browser printing can also save a PDF.
 - Exceptional owner/manager-approved exchanges. Returned products are quarantined and are never automatically returned to sellable batches.
-- Dashboard notifications, audit history and CSV exports.
+- Dashboard notifications, paginated/searchable audit history, Sales History and CSV exports.
+- POULTRY CENTRE AI workspace and floating assistant with role-checked, read-only business summaries and streaming responses.
 - Responsive owner dashboard session for mobile; desktop workspace for authorised business operations.
 
 ## Important business rules
@@ -32,10 +33,16 @@ A private, single-shop veterinary and poultry medicines business-management appl
 - No automated WhatsApp, SMS, email or mobile-money gateway integration is enabled.
 - No full offline transaction synchronisation is enabled. The app requires internet access to operate against its database.
 
+## POULTRY CENTRE AI configuration
+
+The AI provider is server-side only. Copy the variables from `.env.example` into your local `.env` or protected hosting environment. For the initial Groq provider, set `AI_PROVIDER=groq`, `GROQ_API_KEY` and optionally `GROQ_MODEL`. The provider adapter also supports a future `AI_PROVIDER=openai` selection using `OPENAI_API_KEY` and `OPENAI_MODEL`. Never add provider keys to client-side variables (for example, `NEXT_PUBLIC_*`).
+
+The current AI release is intentionally **read-only**. It can stream answers based on narrowly scoped, role-authorized summaries of sales, stock, debts and expenses. It does not yet execute expense recording, stock receiving/purchase drafts, price changes or debt payments. Use the regular, audited business workflows for all changes. AI action proposals and confirmation flows must be completed and tested separately before enabling writes.
+
 ## Requirements
 
 - Node.js 20.9+ (Node.js 22 LTS is recommended).
-- Next.js is pinned to 15.5.29 (patched November 3, 2026) and React/React DOM to 19.2.9 (patched for the October 14, 2026 React Server Components advisories). Re-check upstream security advisories and update these exact pins before every production deployment.
+- The supplied manifest currently declares Next.js `^16.4.5`, React/React DOM `19.2.9`, and `eslint-config-next` `15.5.6`. Review and align framework/tooling versions before production deployment; do not upgrade dependencies blindly.
 - A PostgreSQL database (Neon PostgreSQL is suitable).
 - npm.
 
@@ -115,8 +122,36 @@ Back up the database before production migrations and rehearse restoring a backu
 - Configure production HTTPS, restrict database credentials, enable managed database backups and monitor failed sign-ins. Revoke user sessions when an account is disabled.
 - Barcode support assumes a USB/Bluetooth keyboard-wedge scanner; no camera scanning permission is enabled.
 
-## Current delivery status
+## Current implementation and verification status (7 November 2026)
 
-This archive is a newly generated application source project and database migration. It has not been connected to the owner's real PostgreSQL database, and no production credentials are included. In the generation environment, npm registry access timed out, so dependencies could not be installed; therefore a Next.js production build, ESLint run, TypeScript typecheck and Vitest execution could not be truthfully certified here. Static checks completed here: 55 TypeScript/TSX files parsed with zero syntax errors; all local source imports resolved; all 26 Drizzle tables and their columns matched the SQL migration; the SVG favicon parsed as valid XML; and five financial-helper smoke checks passed manually. These checks are not a substitute for a real package typecheck/build, ESLint, Vitest run, PostgreSQL migration test or dependency audit. Run the quality commands above after `npm install` and address any toolchain/type errors before production use.
+This archive is an incremental improvement to the supplied source project. It preserves the existing PostgreSQL schema and business services, and adds one additive migration: `drizzle/0002_operation_requests.sql` creates an idempotency-request table used to protect sales, purchase receiving, debt repayments and expense submissions from duplicate retries. The migration does not drop or rewrite existing tables, columns or business records. Review the database and take a restorable backup before running `npm run db:migrate` against any non-disposable database.
 
-The initial UI includes the English interface and a Kiswahili language preference for the navigation/dashboard strings. The remaining detailed operational-page copy is currently English; full translation of every field, message, report and receipt is still a required completion task before advertising full bilingual coverage.
+Implemented in this working copy:
+
+- Duplicate-submission protection for sales, purchase receiving, debt repayments and expenses; successful POS/purchase forms clear their submitted details and rotate the request key.
+- POS product search across product names, SKU and barcode.
+- A dedicated paginated Sales History with business-local date filters, search, sale-line pricing/discount details, payment methods and receipt links.
+- A searchable, filterable, paginated Audit Log with expandable event details; historical events are retained.
+- Customer debt repayment history in the Debt Management screen.
+- Product registration's less frequently used attributes moved into an optional details section; underlying fields remain available.
+- Responsive table containment and wrapping improvements without applying a global horizontal-overflow hiding rule.
+- A server-only AI provider adapter for Groq and OpenAI, an authenticated chat endpoint, role-authorized summary queries, a streaming chat UI, a floating assistant and a dedicated AI workspace. AI currently has **read-only** access; it does not execute actions.
+- Additional English/Kiswahili copy for newly added and updated screens, plus persisted document language. Existing legacy screens still contain English-only UI text.
+
+Verification performed in the working environment:
+
+- `npm run typecheck`: passed.
+- ESLint (`node node_modules/eslint/bin/eslint.js .`): passed with no warnings or errors. (The supplied archive’s executable permissions prevented the `npm run lint` wrapper from launching its binary in this Linux container; a clean dependency install should restore the normal npm-script path.)
+- TypeScript/TSX transpile syntax scan: 55 source files checked, zero syntax diagnostics.
+- Vitest: could not start because the supplied `node_modules` lacks the platform-specific optional Rollup package `@rollup/rollup-linux-x64-gnu`.
+- Production build: not certified. The supplied dependencies are from a different operating system and the package registry was unreachable during attempted installation, preventing installation of the platform-specific Next.js SWC binary.
+- Database migration: not executed. No live or staging database credentials/data were supplied.
+- Browser/device QA: not executed. Mobile layout changes were inspected in source but still need testing at real viewport sizes and on touch devices.
+
+Before production use, install dependencies on the target OS (`npm ci`), then rerun lint, typecheck, tests and build. Apply the additive migration against a backed-up staging database first. Configure a server-side AI key and verify provider availability. Do not treat the AI as an action executor until the separate proposal/confirmation/server-validation/audit workflows for expense recording, purchase drafts, price changes and debt repayments have been implemented and tested. Full English/Kiswahili coverage also remains outstanding on legacy forms, reports and receipt labels.
+
+The supplied archive contained local environment files and installed dependencies. This delivery archive excludes `.env`, `.git`, `node_modules`, `.next` and generated build caches. Only `.env.example` is included; it contains placeholders, not real secrets.
+
+## AI chat HTTP 400 validation fix
+
+The AI chat endpoint accepts the floating assistant on any internal application route. The page path is treated as context, not as an authorization decision. Chat history now allows longer assistant responses (up to 12,000 characters), and empty transcript entries are filtered before forwarding messages to the provider. The client also omits empty transcript entries. These changes prevent valid AI use from failing because the assistant was opened on a route not listed in an old enum, because an AI response exceeded 3,000 characters, or because an interrupted empty reply remained in history.

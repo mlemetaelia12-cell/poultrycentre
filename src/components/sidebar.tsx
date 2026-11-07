@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Activity, BarChart3, Bell, Boxes, ClipboardList, CreditCard, FileText, LayoutDashboard, LogOut, Package, Settings, ShoppingCart, Truck, Users, Wallet, Tags, type LucideIcon } from "lucide-react";
+import { Activity, BarChart3, Bell, Bot, Boxes, ClipboardList, CreditCard, FileText, LayoutDashboard, LogOut, Package, Settings, ShoppingCart, Truck, Users, Wallet, Tags, type LucideIcon } from "lucide-react";
 import { Logo } from "./logo";
 import { logoutAction, setLanguageAction } from "@/lib/actions";
 import type { Role } from "@/lib/types";
@@ -8,6 +8,7 @@ import { hasPermission } from "@/lib/permissions";
 
 const navItems: Array<{ href: string; key: Parameters<typeof t>[1]; permission: Parameters<typeof hasPermission>[1]; icon: LucideIcon }> = [
   { href: "/dashboard", key: "dashboard", permission: "dashboard:read", icon: LayoutDashboard },
+  { href: "/ai", key: "ai", permission: "dashboard:read", icon: Bot },
   { href: "/sales", key: "sales", permission: "sales:read", icon: ShoppingCart },
   { href: "/exchanges", key: "exchanges", permission: "sales:read", icon: ClipboardList },
   { href: "/products", key: "products", permission: "products:read", icon: Package },

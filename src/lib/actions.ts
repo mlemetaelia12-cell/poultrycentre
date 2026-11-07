@@ -9,7 +9,7 @@ import { redirect } from "next/navigation";
 import { z } from "zod";
 import { getDb } from "@/db";
 import {
-  authAttempts, auditLogs, batches, businessSettings, cashierShifts, categories, customers, debtTransactions,
+  authAttempts, auditLogs, batches, businessSettings, cashierShifts, categories, customers, debtTransactions, operationRequests,
   expenses, notifications, paymentAllocations, payments, products, purchaseItems, purchasePayments, purchases, saleItems, sales, sessions,
   quarantinedStock, stockMovements, suppliers, unitConversions, users, exchanges,
 } from "@/db/schema";
@@ -25,6 +25,7 @@ export type ActionState = { error?: string; success?: string };
 const paymentMethods = ["cash", "mpesa", "mixx", "airtel_money", "halopesa", "bank_transfer"] as const;
 const usernameSchema = z.string().trim().min(3).max(40).regex(/^[a-zA-Z0-9._-]+$/, "Use letters, numbers, dot, dash or underscore.").transform((value) => value.toLowerCase());
 const uuidSchema = z.string().uuid();
+const idempotencyKeySchema = z.string().uuid();
 const moneySchema = z.coerce.number().finite().min(0).max(9999999999);
 
 async function writeAudit(actorId: string, action: string, entityType: string, entityId: string | null, details: Record<string, unknown> = {}) {
@@ -184,6 +185,8 @@ const purchaseLineSchema = z.array(z.object({ productId: uuidSchema, batchNumber
 
 export async function receivePurchaseAction(_previous: ActionState, formData: FormData): Promise<ActionState> {
   const actor = await requirePermission("purchases:write", true);
+  const idempotencyKey = safeText(formData.get("idempotencyKey"), 36);
+  if (!idempotencyKeySchema.safeParse(idempotencyKey).success) return { error: "Refresh the page before receiving this purchase." };
   let lines: z.infer<typeof purchaseLineSchema>;
   try { lines = parseJson(formData.get("items"), purchaseLineSchema); } catch (error) { return { error: error instanceof Error ? error.message : "Purchase items are invalid." }; }
   const supplierId = safeText(formData.get("supplierId"), 36);
@@ -194,10 +197,20 @@ export async function receivePurchaseAction(_previous: ActionState, formData: Fo
   for (const line of lines) if (line.expiryDate < todayDateTz()) return { error: "Expired stock cannot be received as sellable inventory." };
   const db = getDb();
   const totalCents = lines.reduce((sum, item) => sum + toCents(item.quantity * item.unitCost), 0);
+  const invoiceNumber = safeText(formData.get("invoiceNumber"), 100);
+  const notes = safeText(formData.get("notes"), 1000);
+  const fingerprint = sha256(JSON.stringify({ actorId: actor.id, supplierId, invoiceNumber, notes, paymentMethod: purchaseMethod, paymentReference, lines }));
   try {
-    await db.transaction(async (tx) => {
+    const operation = await db.transaction(async (tx) => {
+      const [claim] = await tx.insert(operationRequests).values({ actorId: actor.id, scope: "purchase.receive", idempotencyKey, fingerprint }).onConflictDoNothing().returning({ id: operationRequests.id });
+      if (!claim) {
+        const [prior] = await tx.select().from(operationRequests).where(and(eq(operationRequests.actorId, actor.id), eq(operationRequests.scope, "purchase.receive"), eq(operationRequests.idempotencyKey, idempotencyKey))).for("update").limit(1);
+        if (!prior || prior.fingerprint !== fingerprint) throw new Error("This purchase submission key was already used for different details. Refresh and review the purchase.");
+        if (!prior.entityId) throw new Error("This purchase is already being processed. Check purchase history before retrying.");
+        return { duplicate: true as const, entityId: prior.entityId };
+      }
       const reference = `PUR-${todayDateTz().replaceAll("-", "")}-${randomUUID().slice(0, 8).toUpperCase()}`;
-      const [purchase] = await tx.insert(purchases).values({ reference, supplierId: supplierId || null, invoiceNumber: safeText(formData.get("invoiceNumber"), 100) || null, subtotal: (totalCents / 100).toFixed(2), notes: safeText(formData.get("notes"), 1000) || null, createdBy: actor.id }).returning({ id: purchases.id });
+      const [purchase] = await tx.insert(purchases).values({ reference, supplierId: supplierId || null, invoiceNumber: invoiceNumber || null, subtotal: (totalCents / 100).toFixed(2), notes: notes || null, createdBy: actor.id }).returning({ id: purchases.id });
       await tx.insert(purchasePayments).values({ purchaseId: purchase.id, amount: (totalCents / 100).toFixed(2), method: purchaseMethod, reference: paymentReference || null, paidBy: actor.id });
       for (const line of lines) {
         const product = await tx.select({ id: products.id }).from(products).where(and(eq(products.id, line.productId), eq(products.active, true))).limit(1);
@@ -208,9 +221,11 @@ export async function receivePurchaseAction(_previous: ActionState, formData: Fo
         await tx.insert(stockMovements).values({ productId: line.productId, batchId: batch.id, movementType: "purchase", quantity: line.quantity.toFixed(3), referenceType: "purchase", referenceId: purchase.id, actorId: actor.id, reason: "Stock received" });
       }
       await tx.insert(auditLogs).values({ actorId: actor.id, action: "purchase.receive", entityType: "purchase", entityId: purchase.id, details: { reference, lineCount: lines.length, total: (totalCents / 100).toFixed(2) } });
+      await tx.update(operationRequests).set({ entityType: "purchase", entityId: purchase.id }).where(eq(operationRequests.id, claim.id));
+      return { duplicate: false as const, entityId: purchase.id };
     });
     revalidatePath("/inventory"); revalidatePath("/purchases"); revalidatePath("/dashboard");
-    return { success: "Purchase received and stock batches created." };
+    return { success: operation.duplicate ? "This purchase was already received. No duplicate stock was added." : "Purchase received and stock batches created." };
   } catch (error) { return { error: error instanceof Error ? error.message : "Unable to receive this purchase." }; }
 }
 
@@ -219,6 +234,8 @@ const salePaymentsSchema = z.array(z.object({ method: z.enum(paymentMethods), am
 
 export async function createSaleAction(_previous: ActionState, formData: FormData): Promise<ActionState> {
   const actor = await requirePermission("sales:write", true);
+  const idempotencyKey = safeText(formData.get("idempotencyKey"), 36);
+  if (!idempotencyKeySchema.safeParse(idempotencyKey).success) return { error: "Refresh the sales page before completing this sale." };
   let lines: z.infer<typeof saleLineSchema>;
   let paymentLines: z.infer<typeof salePaymentsSchema>;
   try {
@@ -233,9 +250,18 @@ export async function createSaleAction(_previous: ActionState, formData: FormDat
   const discount = safeNumber(formData.get("discount"), 0);
   if (discount < 0 || discount > 999999999) return { error: "Discount amount is invalid." };
   if (discount > 0 && actor.role !== "owner" && actor.role !== "manager") return { error: "Only an owner or manager can approve a sale discount." };
+  const notes = safeText(formData.get("notes"), 1000);
+  const fingerprint = sha256(JSON.stringify({ actorId: actor.id, lines, paymentLines, customerId, dueDate, saleType, discount, notes }));
 
   try {
-    await getDb().transaction(async (tx) => {
+    const operation = await getDb().transaction(async (tx) => {
+      const [claim] = await tx.insert(operationRequests).values({ actorId: actor.id, scope: "sale.create", idempotencyKey, fingerprint }).onConflictDoNothing().returning({ id: operationRequests.id });
+      if (!claim) {
+        const [prior] = await tx.select().from(operationRequests).where(and(eq(operationRequests.actorId, actor.id), eq(operationRequests.scope, "sale.create"), eq(operationRequests.idempotencyKey, idempotencyKey))).for("update").limit(1);
+        if (!prior || prior.fingerprint !== fingerprint) throw new Error("This sale submission key was already used for different details. Refresh and review the basket.");
+        if (!prior.entityId) throw new Error("This sale is already being processed. Check Sales History before retrying.");
+        return { duplicate: true as const, entityId: prior.entityId };
+      }
       if (actor.role === "cashier") {
         const [openShift] = await tx.select({ id: cashierShifts.id }).from(cashierShifts)
           .where(and(eq(cashierShifts.userId, actor.id), isNull(cashierShifts.closedAt))).for("update").limit(1);
@@ -310,7 +336,7 @@ export async function createSaleAction(_previous: ActionState, formData: FormDat
       const [sale] = await tx.insert(sales).values({
         receiptNumber, customerId: customerId || null, saleType, subtotal: (subtotalCents / 100).toFixed(2), discount: (discountCents / 100).toFixed(2),
         total: (totalCents / 100).toFixed(2), amountPaid: (paidCents / 100).toFixed(2), balanceDue: (dueCents / 100).toFixed(2),
-        status: dueCents === 0 ? "completed" : paidCents === 0 ? "credit" : "partial", notes: safeText(formData.get("notes"), 1000) || null, createdBy: actor.id,
+        status: dueCents === 0 ? "completed" : paidCents === 0 ? "credit" : "partial", notes: notes || null, createdBy: actor.id,
       }).returning({ id: sales.id });
 
       for (const line of saleCalc) {
@@ -340,9 +366,11 @@ export async function createSaleAction(_previous: ActionState, formData: FormDat
       }
       if (dueCents > 0 && customerId) await tx.insert(debtTransactions).values({ customerId, saleId: sale.id, transactionType: "debit", amount: (dueCents / 100).toFixed(2), dueDate: dueDate || null, createdBy: actor.id, notes: `Balance from ${receiptNumber}` });
       await tx.insert(auditLogs).values({ actorId: actor.id, action: "sale.create", entityType: "sale", entityId: sale.id, details: { receiptNumber, total: totalCents / 100, paid: paidCents / 100, due: dueCents / 100 } });
+      await tx.update(operationRequests).set({ entityType: "sale", entityId: sale.id }).where(eq(operationRequests.id, claim.id));
+      return { duplicate: false as const, entityId: sale.id };
     });
-    revalidatePath("/sales"); revalidatePath("/inventory"); revalidatePath("/debts"); revalidatePath("/dashboard"); revalidatePath("/reports");
-    return { success: "Sale completed. Open Receipts to print or save a copy." };
+    revalidatePath("/sales"); revalidatePath("/sales/history"); revalidatePath("/inventory"); revalidatePath("/debts"); revalidatePath("/dashboard"); revalidatePath("/reports");
+    return { success: operation.duplicate ? "This sale was already completed. No second sale was created." : "Sale completed. Open Receipts to print or save a copy." };
   } catch (error) { return { error: error instanceof Error ? error.message : "Sale could not be completed." }; }
 }
 
@@ -381,14 +409,24 @@ export async function voidUnpaidCreditSaleAction(formData: FormData) {
 
 export async function recordDebtPaymentAction(_previous: ActionState, formData: FormData): Promise<ActionState> {
   const actor = await requirePermission("debts:write", true);
+  const idempotencyKey = safeText(formData.get("idempotencyKey"), 36);
+  if (!idempotencyKeySchema.safeParse(idempotencyKey).success) return { error: "Refresh the page before recording this payment." };
   const parsed = z.object({ customerId: uuidSchema, amount: z.coerce.number().positive().max(999999999), method: z.enum(paymentMethods), reference: z.string().max(120) }).safeParse({
     customerId: formData.get("customerId"), amount: formData.get("amount"), method: formData.get("method"), reference: safeText(formData.get("reference"), 120),
   });
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Check repayment details." };
   const repaymentCents = toCents(parsed.data.amount);
   if (repaymentCents <= 0) return { error: "Repayment must be at least TSh 0.01." };
+  const fingerprint = sha256(JSON.stringify({ actorId: actor.id, ...parsed.data }));
   try {
-    await getDb().transaction(async (tx) => {
+    const operation = await getDb().transaction(async (tx) => {
+      const [claim] = await tx.insert(operationRequests).values({ actorId: actor.id, scope: "debt.repayment", idempotencyKey, fingerprint }).onConflictDoNothing().returning({ id: operationRequests.id });
+      if (!claim) {
+        const [prior] = await tx.select().from(operationRequests).where(and(eq(operationRequests.actorId, actor.id), eq(operationRequests.scope, "debt.repayment"), eq(operationRequests.idempotencyKey, idempotencyKey))).for("update").limit(1);
+        if (!prior || prior.fingerprint !== fingerprint) throw new Error("This payment submission key was already used for different details. Refresh and review the payment.");
+        if (!prior.entityId) throw new Error("This payment is already being processed. Check payment history before retrying.");
+        return { duplicate: true as const, entityId: prior.entityId };
+      }
       const rows = await tx.select().from(sales).where(and(eq(sales.customerId, parsed.data.customerId), gt(sales.balanceDue, "0"), inArray(sales.status, ["partial", "credit"]))).orderBy(asc(sales.createdAt)).for("update");
       const creditRows = await tx.select({ value: sql<string>`COALESCE(SUM(CASE WHEN ${debtTransactions.transactionType} = 'debit' THEN ${debtTransactions.amount} WHEN ${debtTransactions.transactionType} = 'credit' THEN -${debtTransactions.amount} ELSE 0 END), 0)` }).from(debtTransactions).where(eq(debtTransactions.customerId, parsed.data.customerId));
       const outstandingCents = toCents(Number(creditRows[0]?.value ?? 0));
@@ -410,27 +448,41 @@ export async function recordDebtPaymentAction(_previous: ActionState, formData: 
       if (allocations.length) await tx.insert(paymentAllocations).values(allocations.map((allocation) => ({ paymentId: paymentRow.id, saleId: allocation.saleId, amount: allocation.amount })));
       await tx.insert(debtTransactions).values({ customerId: parsed.data.customerId, transactionType: "credit", amount: (repaymentCents / 100).toFixed(2), createdBy: actor.id, notes: "Customer debt repayment" });
       await tx.insert(auditLogs).values({ actorId: actor.id, action: "debt.repayment", entityType: "customer", entityId: parsed.data.customerId, details: { amount: parsed.data.amount, method: parsed.data.method } });
+      await tx.update(operationRequests).set({ entityType: "payment", entityId: paymentRow.id }).where(eq(operationRequests.id, claim.id));
+      return { duplicate: false as const, entityId: paymentRow.id };
     });
     revalidatePath("/debts"); revalidatePath("/customers"); revalidatePath("/dashboard"); revalidatePath("/reports");
-    return { success: "Customer repayment recorded." };
+    return { success: operation.duplicate ? "This debt payment was already recorded. No duplicate payment was created." : "Customer repayment recorded." };
   } catch (error) { return { error: error instanceof Error ? error.message : "Could not record repayment." }; }
 }
 
 export async function createExpenseAction(_previous: ActionState, formData: FormData): Promise<ActionState> {
   const actor = await requirePermission("expenses:write", true);
+  const idempotencyKey = safeText(formData.get("idempotencyKey"), 36);
+  if (!idempotencyKeySchema.safeParse(idempotencyKey).success) return { error: "Refresh the page before recording this expense." };
   const parsed = z.object({ category: z.enum(["Rent", "Salary", "Transport", "Electricity", "Internet", "Food", "Other"]), description: z.string().trim().min(2).max(1000), amount: z.coerce.number().positive().max(999999999), method: z.enum(paymentMethods), reference: z.string().max(120) }).safeParse({
     category: formData.get("category"), description: formData.get("description"), amount: formData.get("amount"), method: formData.get("method"), reference: safeText(formData.get("reference"), 120),
   });
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Check expense details." };
   const db = getDb();
   const meta = await requestMeta();
+  const fingerprint = sha256(JSON.stringify({ actorId: actor.id, ...parsed.data }));
   try {
-    await db.transaction(async (tx) => {
+    const operation = await db.transaction(async (tx) => {
+      const [claim] = await tx.insert(operationRequests).values({ actorId: actor.id, scope: "expense.create", idempotencyKey, fingerprint }).onConflictDoNothing().returning({ id: operationRequests.id });
+      if (!claim) {
+        const [prior] = await tx.select().from(operationRequests).where(and(eq(operationRequests.actorId, actor.id), eq(operationRequests.scope, "expense.create"), eq(operationRequests.idempotencyKey, idempotencyKey))).for("update").limit(1);
+        if (!prior || prior.fingerprint !== fingerprint) throw new Error("This expense submission key was already used for different details. Refresh and review the expense.");
+        if (!prior.entityId) throw new Error("This expense is already being processed. Check expense history before retrying.");
+        return { duplicate: true as const, entityId: prior.entityId };
+      }
       const [row] = await tx.insert(expenses).values({ ...parsed.data, amount: (toCents(parsed.data.amount) / 100).toFixed(2), reference: parsed.data.reference || null, createdBy: actor.id }).returning({ id: expenses.id });
       await tx.insert(auditLogs).values({ actorId: actor.id, action: "expense.create", entityType: "expense", entityId: row.id, details: { amount: parsed.data.amount, category: parsed.data.category }, ipHash: sha256(meta.ip) });
+      await tx.update(operationRequests).set({ entityType: "expense", entityId: row.id }).where(eq(operationRequests.id, claim.id));
+      return { duplicate: false as const, entityId: row.id };
     });
     revalidatePath("/expenses"); revalidatePath("/dashboard"); revalidatePath("/reports");
-    return { success: "Expense recorded." };
+    return { success: operation.duplicate ? "This expense was already recorded. No duplicate expense was created." : "Expense recorded." };
   } catch { return { error: "Could not record this expense. Refresh and try again." }; }
 }
 

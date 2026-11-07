@@ -57,6 +57,22 @@ export const authAttempts = pgTable("auth_attempts", {
   succeeded: boolean("succeeded").notNull().default(false),
 }, (t) => ({ keyIdx: index("auth_attempts_key_time_idx").on(t.attemptKey, t.attemptedAt) }));
 
+// Tracks critical user-submitted operations so a repeated browser/network request
+// cannot create a second sale, stock receipt, debt collection or expense.
+export const operationRequests = pgTable("operation_requests", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  actorId: uuid("actor_id").notNull().references(() => users.id, { onDelete: "restrict" }),
+  scope: varchar("scope", { length: 60 }).notNull(),
+  idempotencyKey: uuid("idempotency_key").notNull(),
+  fingerprint: varchar("fingerprint", { length: 64 }).notNull(),
+  entityType: varchar("entity_type", { length: 60 }),
+  entityId: uuid("entity_id"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  uniqueRequest: uniqueIndex("operation_requests_actor_scope_key_uq").on(t.actorId, t.scope, t.idempotencyKey),
+  actorCreatedIdx: index("operation_requests_actor_created_idx").on(t.actorId, t.createdAt),
+}));
+
 export const categories = pgTable("categories", {
   id: uuid("id").defaultRandom().primaryKey(),
   name: varchar("name", { length: 100 }).notNull(),

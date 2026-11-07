@@ -4,7 +4,6 @@ import { getDb } from "@/db";
 import { users } from "@/db/schema";
 import { ActionForm } from "@/components/action-form";
 import { createStaffAction, setStaffActiveAction } from "@/lib/actions";
-import { DataTable } from "@/components/data-table";
 import { PageHeader } from "@/components/page-header";
 import { dateTime } from "@/lib/format";
 import { requireUser } from "@/lib/auth";

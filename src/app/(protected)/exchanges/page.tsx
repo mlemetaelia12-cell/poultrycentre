@@ -243,7 +243,7 @@ export default async function ExchangesPage() {
             <div className="sm:col-span-2 xl:col-span-3 rounded-lg bg-slate-50 p-3 text-xs leading-5 text-slate-600">
               The system computes the price difference using the
               recorded original sale value and the replacement
-              product's configured retail/wholesale base-unit price.
+              product&apos;s configured retail/wholesale base-unit price.
               Returned stock remains quarantined. No returned medicine
               is added back to available stock.
             </div>

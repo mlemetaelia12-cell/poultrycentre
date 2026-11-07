@@ -15,10 +15,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .card { border: 1px solid #e5ebe6; border-radius: 1.1rem; background: #fff; box-shadow: 0 8px 32px rgba(22,54,36,.045); }
 .section-title { color: #25352b; font-size: 1.05rem; font-weight: 800; letter-spacing: -.02em; }
 .section-subtitle { margin-top: .25rem; color: #728077; font-size: .78rem; }
-.table-wrap { overflow-x: auto; border: 1px solid #e5ebe6; border-radius: 1rem; background: white; }
+.table-wrap { width: 100%; max-width: 100%; min-width: 0; overflow-x: auto; overscroll-behavior-x: contain; -webkit-overflow-scrolling: touch; border: 1px solid #e5ebe6; border-radius: 1rem; background: white; }
 .data-table { width: 100%; min-width: 640px; border-collapse: collapse; text-align: left; font-size: .78rem; }
 .data-table th { background: #f7faf7; padding: .85rem 1rem; color: #68766e; font-size: .67rem; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; }
-.data-table td { border-top: 1px solid #edf1ed; padding: .85rem 1rem; color: #344239; vertical-align: middle; }
+.data-table td { border-top: 1px solid #edf1ed; padding: .85rem 1rem; color: #344239; vertical-align: middle; overflow-wrap: anywhere; }
 .data-table tr:hover td { background: #fbfdfb; }
 .badge { display: inline-flex; align-items: center; border-radius: 999px; padding: .25rem .55rem; font-size: .67rem; font-weight: 700; }
 .badge-green { background: #eaf7ee; color: #166534; }
@@ -32,3 +32,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .print-area { display: block !important; width: 100%; }
   .card { box-shadow: none; border: 0; }
 }
+
+/* Responsive layout guardrails: contain wide data widgets without clipping page content. */
+img, svg, video, canvas { max-width: 100%; }
+main, section, article, form { min-width: 0; }
+input, select, textarea { max-width: 100%; }
+@media (max-width: 639px) { .data-table th, .data-table td { padding: .7rem .75rem; } }

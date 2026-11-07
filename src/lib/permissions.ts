@@ -22,7 +22,7 @@ export function hasPermission(role: Role, permission: Permission): boolean {
 export function canAccessPath(role: Role, pathname: string): boolean {
   if (pathname === "/exchanges" || pathname.startsWith("/exchanges/")) return role === "owner" || role === "manager";
   const rules: Array<[string, Permission]> = [
-    ["/dashboard", "dashboard:read"], ["/products", "products:read"], ["/categories", "settings:write"], ["/inventory", "inventory:read"],
+    ["/dashboard", "dashboard:read"], ["/ai", "dashboard:read"], ["/products", "products:read"], ["/categories", "settings:write"], ["/inventory", "inventory:read"],
     ["/sales", "sales:read"], ["/exchanges", "sales:read"], ["/purchases", "purchases:read"], ["/customers", "customers:read"],
     ["/debts", "debts:read"], ["/expenses", "expenses:read"], ["/reports", "reports:read"],
     ["/staff", "staff:read"], ["/notifications", "notifications:read"], ["/audit", "audit:read"],

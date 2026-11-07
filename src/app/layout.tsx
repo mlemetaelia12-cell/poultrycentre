@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
 import { Plus_Jakarta_Sans } from "next/font/google";
 import "./globals.css";
+import { getLocale } from "@/i18n/messages";
 
 const plusJakarta = Plus_Jakarta_Sans({ subsets: ["latin"], variable: "--font-plus-jakarta", display: "swap" });
 
@@ -16,6 +17,7 @@ export const metadata: Metadata = {
 
 export const viewport: Viewport = { themeColor: "#14532d", width: "device-width", initialScale: 1 };
 
-export default function RootLayout({ children }: { children: ReactNode }) {
-  return <html lang="en"><body className={plusJakarta.className}>{children}</body></html>;
+export default async function RootLayout({ children }: { children: ReactNode }) {
+  const locale = await getLocale();
+  return <html lang={locale}><body className={plusJakarta.className}>{children}</body></html>;
 }

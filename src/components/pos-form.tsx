@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useMemo, useState } from "react";
+import { useActionState, useEffect, useMemo, useState } from "react";
 import type { ActionState } from "@/lib/actions";
 import { createSaleAction } from "@/lib/actions";
 import { money } from "@/lib/format";
@@ -15,6 +15,16 @@ const paymentOptions = [{ value: "cash", label: "Cash" }, { value: "mpesa", labe
 
 export function PosForm({ products, customers }: { products: Product[]; customers: Customer[] }) {
   const [state, formAction, pending] = useActionState(createSaleAction, {} as ActionState);
+  const [idempotencyKey, setIdempotencyKey] = useState("");
+  useEffect(() => { if (!idempotencyKey) setIdempotencyKey(crypto.randomUUID()); }, [idempotencyKey]);
+  useEffect(() => {
+    if (!state.success) return;
+    setCart([]);
+    setPayments([{ method: "cash", amount: "", reference: "" }]);
+    setDiscount("0");
+    setNotes("");
+    setIdempotencyKey(crypto.randomUUID());
+  }, [state.success]);
   const [saleType, setSaleType] = useState<"retail" | "wholesale">("retail");
   const [productId, setProductId] = useState(products[0]?.id ?? "");
   const [productSearch, setProductSearch] = useState("");
@@ -27,7 +37,7 @@ export function PosForm({ products, customers }: { products: Product[]; customer
   function selectScannedProduct(query: string) {
     const value = query.trim().toLocaleLowerCase();
     if (!value) return;
-    const found = products.find((product) => product.barcode?.toLocaleLowerCase() === value || product.sku.toLocaleLowerCase() === value || product.units.some((unit) => unit.barcode?.toLocaleLowerCase() === value));
+    const found = products.find((product) => product.name.toLocaleLowerCase() === value || product.barcode?.toLocaleLowerCase() === value || product.sku.toLocaleLowerCase() === value || product.units.some((unit) => unit.barcode?.toLocaleLowerCase() === value));
     if (!found) return;
     setProductId(found.id);
     const matchedUnit = found.units.find((unit) => unit.barcode?.toLocaleLowerCase() === value);
@@ -67,7 +77,8 @@ export function PosForm({ products, customers }: { products: Product[]; customer
   }
   const selectedCustomer = customers.find((customer) => customer.id === customerId);
 
-  return <form action={formAction} className="space-y-5">
+  return <form action={formAction} className="min-w-0 space-y-5">
+    <input type="hidden" name="idempotencyKey" value={idempotencyKey} />
     <input type="hidden" name="items" value={JSON.stringify(cart.map(({ productId, quantity, unitName, unitPrice }) => ({ productId, quantity, unitName, unitPrice })))} />
     <input type="hidden" name="payments" value={JSON.stringify(payments.filter((p) => Number(p.amount) > 0).map((p) => ({ method: p.method, amount: Number(p.amount), reference: p.reference })))} />
     <input type="hidden" name="saleType" value={saleType} /><input type="hidden" name="customerId" value={customerId} /><input type="hidden" name="dueDate" value={dueDate} /><input type="hidden" name="discount" value={discount} /><input type="hidden" name="notes" value={notes} />
@@ -75,13 +86,13 @@ export function PosForm({ products, customers }: { products: Product[]; customer
       <div className="space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-2"><div><h2 className="section-title">Build sale</h2><p className="section-subtitle">Select products and scan or type barcode/SKU using search.</p></div><div className="inline-flex rounded-xl bg-slate-100 p-1"><button type="button" onClick={() => changeSaleType("retail")} className={`rounded-lg px-4 py-2 text-xs font-semibold ${saleType === "retail" ? "bg-white text-forest-800 shadow-sm" : "text-slate-500"}`}>Retail</button><button type="button" onClick={() => changeSaleType("wholesale")} className={`rounded-lg px-4 py-2 text-xs font-semibold ${saleType === "wholesale" ? "bg-white text-forest-800 shadow-sm" : "text-slate-500"}`}>Wholesale</button></div></div>
         <div className="card grid gap-3 p-4 sm:grid-cols-[2fr_1fr_1fr_auto] sm:items-end">
-          <div><label className="field-label">Product *</label><select className="field" value={productId} onChange={(e) => { setProductId(e.target.value); const next = products.find((p) => p.id === e.target.value); setUnitName(next?.baseUnit ?? "piece"); }}><option value="">Select product</option>{products.map((p) => <option key={p.id} value={p.id}>{p.name} · {p.sku}</option>)}</select></div>
+          <div className="min-w-0"><label className="field-label" htmlFor="pos-product-search">Find product or scan barcode/SKU *</label><input id="pos-product-search" className="field mb-2" type="search" value={productSearch} onChange={(event) => setProductSearch(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); selectScannedProduct(productSearch); } }} placeholder="Type product, SKU or scan barcode" /><select className="field" value={productId} onChange={(event) => { const next = products.find((item) => item.id === event.target.value); setProductId(event.target.value); setUnitName(next?.baseUnit ?? "piece"); setProductSearch(""); }}><option value="">Select product</option>{matchingProducts.map((product) => <option key={product.id} value={product.id}>{product.name} · {product.sku}</option>)}{!matchingProducts.length && <option value="" disabled>No matching product</option>}</select></div>
           <div><label className="field-label">Unit</label><select className="field" value={unitName} onChange={(e) => setUnitName(e.target.value)} disabled={!selected}><option value={selected?.baseUnit}>{selected?.baseUnit}</option>{selected?.units.map((unit) => <option key={unit.unitName} value={unit.unitName}>{unit.unitName} ({unit.baseQuantity} base units)</option>)}</select></div>
           <div><label className="field-label">Quantity</label><input className="field" type="number" min="0.001" step="0.001" value={quantity} onChange={(e) => setQuantity(e.target.value)} /></div>
           <button type="button" onClick={addLine} disabled={!selected || price <= 0} className="min-h-11 rounded-xl bg-forest-700 px-4 text-sm font-semibold text-white disabled:opacity-50">Add item</button>
           <div className="sm:col-span-4"><p className="text-[11px] text-slate-500">Configured unit price: <strong className="text-slate-800">{money(price)}</strong> · Base stock required per selected unit: {factor}</p></div>
         </div>
-        <div className="table-wrap"><table className="data-table"><thead><tr><th>Product</th><th>Unit</th><th>Qty</th><th>Unit price</th><th>Total</th><th /></tr></thead><tbody>
+        <div className="table-wrap min-w-0 max-w-full"><table className="data-table"><thead><tr><th>Product</th><th>Unit</th><th>Qty</th><th>Unit price</th><th>Total</th><th /></tr></thead><tbody>
           {cart.length ? cart.map((line, index) => <tr key={`${line.productId}-${line.unitName}-${index}`}><td className="font-semibold">{line.productName}</td><td>{line.unitName}</td><td>{line.quantity}</td><td>{money(line.unitPrice)}</td><td className="font-semibold">{money(line.quantity * line.unitPrice)}</td><td><button type="button" onClick={() => setCart((current) => current.filter((_, i) => i !== index))} className="text-xs font-semibold text-red-600">Remove</button></td></tr>) : <tr><td colSpan={6} className="py-12 text-center text-sm text-slate-400">Basket is empty. Add at least one product.</td></tr>}
         </tbody></table></div>
       </div>
@@ -157,6 +168,7 @@ export function PosForm({ products, customers }: { products: Product[]; customer
   type="submit"
   disabled={
     pending ||
+    !idempotencyKey ||
     cart.length === 0 ||
     total <= 0 ||
     paid > total + 0.001 ||

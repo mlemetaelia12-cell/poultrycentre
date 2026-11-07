@@ -1,4 +1,4 @@
-import { desc, isNull } from "drizzle-orm";
+import { desc } from "drizzle-orm";
 import { Bell, CheckCheck } from "lucide-react";
 import { getDb } from "@/db";
 import { notifications } from "@/db/schema";

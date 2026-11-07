@@ -10,26 +10,25 @@ function askHidden(prompt: string): Promise<string> {
   }
   return new Promise((resolve, reject) => {
     let value = "";
-    let handler: (chunk: Buffer | string) => void;
     output.write(prompt);
     input.setRawMode(true);
     input.resume();
-    const restore = () => {
+    const restore = (handler: (chunk: Buffer | string) => void) => {
       input.off("data", handler);
       input.setRawMode(false);
       input.pause();
       output.write("\n");
     };
-    handler = (chunk) => {
+    const handler = (chunk: Buffer | string) => {
       const chars = typeof chunk === "string" ? chunk : chunk.toString("utf8");
       for (const char of chars) {
         if (char === "\u0003") {
-          restore();
+          restore(handler);
           reject(new Error("Owner setup cancelled."));
           return;
         }
         if (char === "\r" || char === "\n") {
-          restore();
+          restore(handler);
           resolve(value);
           return;
         }
