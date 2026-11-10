@@ -1,0 +1,15 @@
+node_modules/
+.next/
+out/
+.env
+.env.*
+!.env.example
+coverage/
+*.log
+.DS_Store
+.vercel/
+
+# Local database checks and TypeScript cache
+*.tsbuildinfo
+.db-check.cjs
+.db-drizzle-check.ts

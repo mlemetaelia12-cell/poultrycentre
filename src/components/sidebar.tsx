@@ -1,0 +1,35 @@
+import Link from "next/link";
+import { LayoutDashboard, LogOut, Package, ShoppingCart, CreditCard, History, Users, Settings, type LucideIcon } from "lucide-react";
+import { Logo } from "./logo";
+import { logoutAction } from "@/lib/actions";
+import type { Role } from "@/lib/types";
+import { getLocale, t } from "@/i18n/server";
+import { hasPermission } from "@/lib/permissions";
+
+const navItems: Array<{ href: string; key: Parameters<typeof t>[1]; permission: Parameters<typeof hasPermission>[1]; icon: LucideIcon }> = [
+  { href: "/dashboard", key: "dashboard", permission: "dashboard:read", icon: LayoutDashboard },
+  { href: "/sales", key: "sales", permission: "sales:read", icon: ShoppingCart },
+  { href: "/products", key: "products", permission: "products:read", icon: Package },
+  { href: "/debts", key: "debts", permission: "debts:read", icon: CreditCard },
+  { href: "/sales/history", key: "history", permission: "sales:read", icon: History },
+  { href: "/staff", key: "staff", permission: "staff:read", icon: Users },
+  { href: "/settings", key: "settings", permission: "settings:read", icon: Settings },
+];
+
+export async function Sidebar({ role, displayName, dashboardOnly = false }: { role: Role; displayName: string; dashboardOnly?: boolean }) {
+  const locale = await getLocale();
+  const items = navItems.filter((item) => (!dashboardOnly && hasPermission(role, item.permission)) || item.href === "/dashboard");
+  return (
+    <aside className="no-print hidden min-h-screen w-[252px] shrink-0 flex-col bg-forest-900 px-4 py-6 text-white lg:flex">
+      <div className="px-2"><Logo /></div>
+      <div className="my-7 rounded-2xl border border-white/10 bg-white/5 p-3"><p className="text-[10px] font-semibold uppercase tracking-[.15em] text-emerald-200">{t(locale, "signedInAs")}</p><p className="mt-1 truncate text-sm font-semibold">{displayName}</p><p className="mt-1 text-xs capitalize text-emerald-100/70">{role.replaceAll("_", " ")}</p></div>
+      <nav className="flex-1 space-y-1" aria-label={t(locale, "mainNavigation")}>
+        {items.map(({ href, key, icon: Icon }) => <Link key={href} href={href} className="flex min-h-11 items-center gap-3 rounded-xl px-3 text-sm font-medium text-emerald-50/85 transition hover:bg-white/10 hover:text-white"><Icon size={18} strokeWidth={1.8} /><span>{t(locale, key)}</span></Link>)}
+      </nav>
+      <div className="mt-6 border-t border-white/10 pt-4">
+        <form action={logoutAction}><button className="flex min-h-10 w-full items-center gap-3 rounded-xl px-3 text-sm text-emerald-100/80 hover:bg-white/10"><LogOut size={17} />{t(locale, "signOut")}</button></form>
+        <p className="px-3 pt-4 text-[10px] tracking-wide text-emerald-100/40">Built by Brell</p>
+      </div>
+    </aside>
+  );
+}
