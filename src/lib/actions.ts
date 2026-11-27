@@ -11,7 +11,7 @@ import { getDb } from "@/db";
 import {
   authAttempts, auditLogs, batches, businessSettings, cashierShifts, categories, customers, debtTransactions, operationRequests,
   expenses, notifications, paymentAllocations, payments, products, purchaseItems, purchasePayments, purchases, saleItems, sales, sessions,
-  quarantinedStock, stockMovements, suppliers, unitConversions, users, exchanges,
+  quarantinedStock, stockMovements, suppliers, unitConversions, users, exchanges, draftOrders, draftOrderItems,
 } from "@/db/schema";
 import { createSession, isMobileUserAgent, requestMeta, SESSION_COOKIE, sha256 } from "./auth";
 import { requirePermission, requireUser } from "./auth";
@@ -20,7 +20,7 @@ import { calculateExpectedCash, toCents } from "./finance";
 import type { PaymentMethod, Role } from "./types";
 import { cookies } from "next/headers";
 
-export type ActionState = { error?: string; success?: string };
+export type ActionState = { error?: string; success?: string; draftOrderId?: string };
 
 const paymentMethods = ["cash", "mpesa", "mixx", "airtel_money", "halopesa", "bank_transfer"] as const;
 const usernameSchema = z.string().trim().min(3).max(40).regex(/^[a-zA-Z0-9._-]+$/, "Use letters, numbers, dot, dash or underscore.").transform((value) => value.toLowerCase());
@@ -232,6 +232,75 @@ export async function receivePurchaseAction(_previous: ActionState, formData: Fo
 const saleLineSchema = z.array(z.object({ productId: uuidSchema, quantity: z.number().positive().max(100000), unitName: z.string().min(1).max(32), unitPrice: z.number().positive().max(999999999) })).min(1).max(100);
 const salePaymentsSchema = z.array(z.object({ method: z.enum(paymentMethods), amount: z.number().positive().max(999999999), reference: z.string().max(120).optional() })).max(10);
 
+export async function saveDraftOrderAction(_previous: ActionState, formData: FormData): Promise<ActionState> {
+  const actor = await requirePermission("sales:write", true);
+  let lines: z.infer<typeof saleLineSchema>;
+  try { lines = parseJson(formData.get("items"), saleLineSchema); }
+  catch (error) { return { error: error instanceof Error ? error.message : "Order details are invalid." }; }
+  const draftId = safeText(formData.get("draftOrderId"), 36);
+  const customerId = safeText(formData.get("customerId"), 36);
+  if (draftId && !uuidSchema.safeParse(draftId).success) return { error: "Draft order reference is invalid." };
+  if (customerId && !uuidSchema.safeParse(customerId).success) return { error: "Select a valid customer." };
+  const customerNameInput = safeText(formData.get("customerName"), 180);
+  const customerPhoneInput = safeText(formData.get("customerPhone"), 32);
+  const deliveryLocation = safeText(formData.get("deliveryLocation"), 1000);
+  const saleType = formData.get("saleType") === "wholesale" ? "wholesale" : "retail";
+  const discount = safeNumber(formData.get("discount"), 0);
+  const notes = safeText(formData.get("notes"), 1000);
+  if (discount < 0 || discount > 999999999) return { error: "Discount amount is invalid." };
+  if (discount > 0 && actor.role !== "owner" && actor.role !== "manager") return { error: "Only an owner or manager can approve a sale discount." };
+  if (!lines.length) return { error: "Add at least one product before saving the draft." };
+  try {
+    const result = await getDb().transaction(async (tx) => {
+      let existing = null as typeof draftOrders.$inferSelect | null;
+      if (draftId) {
+        const [found] = await tx.select().from(draftOrders).where(eq(draftOrders.id, draftId)).for("update").limit(1);
+        if (!found || found.status !== "draft") throw new Error("This draft order is no longer available.");
+        if (found.createdBy !== actor.id && actor.role !== "owner" && actor.role !== "manager") throw new Error("You can only update your own draft orders.");
+        existing = found;
+      }
+      let customerName = customerNameInput || null;
+      let customerPhone = customerPhoneInput || null;
+      if (customerId) {
+        const [customer] = await tx.select().from(customers).where(and(eq(customers.id, customerId), eq(customers.active, true))).limit(1);
+        if (!customer) throw new Error("The selected customer is unavailable.");
+        customerName = customer.name;
+        customerPhone = customer.phone;
+      }
+      const orderNumber = existing?.orderNumber ?? `ORD-${todayDateTz().replaceAll("-", "")}-${randomUUID().slice(0, 8).toUpperCase()}`;
+      let id = existing?.id;
+      if (existing) {
+        await tx.update(draftOrders).set({ customerId: customerId || null, customerName, customerPhone, deliveryLocation: deliveryLocation || null, saleType, discount: (toCents(discount) / 100).toFixed(2), notes: notes || null, updatedAt: new Date() }).where(eq(draftOrders.id, existing.id));
+        await tx.delete(draftOrderItems).where(eq(draftOrderItems.draftOrderId, existing.id));
+      } else {
+        const [created] = await tx.insert(draftOrders).values({ orderNumber, customerId: customerId || null, customerName, customerPhone, deliveryLocation: deliveryLocation || null, saleType, discount: (toCents(discount) / 100).toFixed(2), notes: notes || null, createdBy: actor.id }).returning({ id: draftOrders.id });
+        id = created.id;
+      }
+      for (const line of lines) {
+        const [product] = await tx.select().from(products).where(and(eq(products.id, line.productId), eq(products.active, true))).limit(1);
+        if (!product) throw new Error("A product in this draft is unavailable.");
+        let conversionFactor = 1;
+        let configuredPrice = saleType === "wholesale" ? Number(product.wholesalePrice) : Number(product.retailPrice);
+        if (line.unitName !== product.baseUnit) {
+          const [conversion] = await tx.select().from(unitConversions).where(and(eq(unitConversions.productId, product.id), eq(unitConversions.unitName, line.unitName))).limit(1);
+          if (!conversion) throw new Error(`Unit '${line.unitName}' is not configured for ${product.name}.`);
+          conversionFactor = Number(conversion.baseQuantity);
+          const convertedPrice = saleType === "wholesale" ? conversion.wholesalePrice : conversion.retailPrice;
+          configuredPrice = convertedPrice !== null ? Number(convertedPrice) : configuredPrice * conversionFactor;
+        }
+        if (Math.abs(line.unitPrice - configuredPrice) > 0.005) throw new Error(`The price for ${product.name} has changed. Refresh the product list and try again.`);
+        const baseQuantity = line.quantity * conversionFactor;
+        if (!Number.isFinite(baseQuantity) || baseQuantity <= 0) throw new Error("A draft quantity is invalid.");
+        await tx.insert(draftOrderItems).values({ draftOrderId: id!, productId: product.id, productName: product.name, unitName: line.unitName, quantity: line.quantity.toFixed(3), baseQuantity: baseQuantity.toFixed(3), unitPrice: (toCents(configuredPrice) / 100).toFixed(2), lineTotal: (toCents(line.quantity * configuredPrice) / 100).toFixed(2) });
+      }
+      await tx.insert(auditLogs).values({ actorId: actor.id, action: existing ? "draft_order.update" : "draft_order.create", entityType: "draft_order", entityId: id!, details: { orderNumber, itemCount: lines.length, total: lines.reduce((sum, line) => sum + line.quantity * line.unitPrice, 0), deliveryLocation } });
+      return { id: id!, orderNumber };
+    });
+    revalidatePath("/sales"); revalidatePath("/sales/drafts");
+    return { success: `Draft order ${result.orderNumber} saved. Stock has not been reserved or deducted.`, draftOrderId: result.id };
+  } catch (error) { return { error: error instanceof Error ? error.message : "Draft order could not be saved." }; }
+}
+
 export async function createSaleAction(_previous: ActionState, formData: FormData): Promise<ActionState> {
   const actor = await requirePermission("sales:write", true);
   const idempotencyKey = safeText(formData.get("idempotencyKey"), 36);
@@ -243,7 +312,9 @@ export async function createSaleAction(_previous: ActionState, formData: FormDat
     paymentLines = parseJson(formData.get("payments"), salePaymentsSchema);
   } catch (error) { return { error: error instanceof Error ? error.message : "Sale details are invalid." }; }
   const customerId = safeText(formData.get("customerId"), 36);
+  const draftOrderId = safeText(formData.get("draftOrderId"), 36);
   if (customerId && !uuidSchema.safeParse(customerId).success) return { error: "Select a valid customer." };
+  if (draftOrderId && !uuidSchema.safeParse(draftOrderId).success) return { error: "Draft order reference is invalid." };
   const dueDate = safeText(formData.get("dueDate"), 10);
   if (dueDate && (!/^\d{4}-\d{2}-\d{2}$/.test(dueDate) || new Date(`${dueDate}T00:00:00Z`).toISOString().slice(0, 10) !== dueDate || dueDate < todayDateTz())) return { error: "Choose a valid credit due date that is today or later." };
   const saleType = formData.get("saleType") === "wholesale" ? "wholesale" : "retail";
@@ -251,7 +322,7 @@ export async function createSaleAction(_previous: ActionState, formData: FormDat
   if (discount < 0 || discount > 999999999) return { error: "Discount amount is invalid." };
   if (discount > 0 && actor.role !== "owner" && actor.role !== "manager") return { error: "Only an owner or manager can approve a sale discount." };
   const notes = safeText(formData.get("notes"), 1000);
-  const fingerprint = sha256(JSON.stringify({ actorId: actor.id, lines, paymentLines, customerId, dueDate, saleType, discount, notes }));
+  const fingerprint = sha256(JSON.stringify({ actorId: actor.id, lines, paymentLines, customerId, dueDate, saleType, discount, notes, draftOrderId }));
 
   try {
     const operation = await getDb().transaction(async (tx) => {
@@ -261,6 +332,13 @@ export async function createSaleAction(_previous: ActionState, formData: FormDat
         if (!prior || prior.fingerprint !== fingerprint) throw new Error("This sale submission key was already used for different details. Refresh and review the basket.");
         if (!prior.entityId) throw new Error("This sale is already being processed. Check Sales History before retrying.");
         return { duplicate: true as const, entityId: prior.entityId };
+      }
+      let draftToConvert: typeof draftOrders.$inferSelect | null = null;
+      if (draftOrderId) {
+        const [draft] = await tx.select().from(draftOrders).where(eq(draftOrders.id, draftOrderId)).for("update").limit(1);
+        if (!draft || draft.status !== "draft") throw new Error("This draft order has already been completed or is no longer available.");
+        if (draft.createdBy !== actor.id && actor.role !== "owner" && actor.role !== "manager") throw new Error("You can only complete your own draft orders.");
+        draftToConvert = draft;
       }
       if (actor.role === "cashier") {
         const [openShift] = await tx.select({ id: cashierShifts.id }).from(cashierShifts)
@@ -365,7 +443,11 @@ export async function createSaleAction(_previous: ActionState, formData: FormDat
         await tx.insert(paymentAllocations).values({ paymentId: paymentRow.id, saleId: sale.id, amount: (toCents(payment.amount) / 100).toFixed(2) });
       }
       if (dueCents > 0 && customerId) await tx.insert(debtTransactions).values({ customerId, saleId: sale.id, transactionType: "debit", amount: (dueCents / 100).toFixed(2), dueDate: dueDate || null, createdBy: actor.id, notes: `Balance from ${receiptNumber}` });
-      await tx.insert(auditLogs).values({ actorId: actor.id, action: "sale.create", entityType: "sale", entityId: sale.id, details: { receiptNumber, total: totalCents / 100, paid: paidCents / 100, due: dueCents / 100 } });
+      await tx.insert(auditLogs).values({ actorId: actor.id, action: "sale.create", entityType: "sale", entityId: sale.id, details: { receiptNumber, total: totalCents / 100, paid: paidCents / 100, due: dueCents / 100, draftOrderId: draftToConvert?.id ?? null } });
+      if (draftToConvert) {
+        await tx.update(draftOrders).set({ status: "converted", convertedSaleId: sale.id, updatedAt: new Date() }).where(eq(draftOrders.id, draftToConvert.id));
+        await tx.insert(auditLogs).values({ actorId: actor.id, action: "draft_order.convert", entityType: "draft_order", entityId: draftToConvert.id, details: { saleId: sale.id, receiptNumber } });
+      }
       await tx.update(operationRequests).set({ entityType: "sale", entityId: sale.id }).where(eq(operationRequests.id, claim.id));
       return { duplicate: false as const, entityId: sale.id };
     });
