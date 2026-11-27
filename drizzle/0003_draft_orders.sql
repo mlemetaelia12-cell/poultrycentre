@@ -2,7 +2,7 @@ BEGIN;
 
 CREATE TABLE IF NOT EXISTS draft_orders (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  order_number varchar(40) NOT NULL UNIQUE,
+  order_number varchar(40) NOT NULL,
   customer_id uuid REFERENCES customers(id) ON DELETE SET NULL,
   customer_name varchar(180),
   customer_phone varchar(32),
@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS draft_orders (
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
+CREATE UNIQUE INDEX IF NOT EXISTS draft_orders_order_number_uq ON draft_orders(order_number);
 CREATE INDEX IF NOT EXISTS draft_orders_status_created_idx ON draft_orders(status, created_at);
 CREATE INDEX IF NOT EXISTS draft_orders_creator_idx ON draft_orders(created_by);
 
@@ -30,5 +31,6 @@ CREATE TABLE IF NOT EXISTS draft_order_items (
   unit_price numeric(14,2) NOT NULL,
   line_total numeric(14,2) NOT NULL
 );
+CREATE INDEX IF NOT EXISTS draft_order_items_order_idx ON draft_order_items(draft_order_id);
 
 COMMIT;
