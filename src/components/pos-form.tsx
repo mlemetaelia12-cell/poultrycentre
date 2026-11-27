@@ -175,8 +175,9 @@ export function PosForm({ products, customers, initialDraft }: { products: Produ
     <p role="status" className="mt-4 rounded-lg p-3 text-xs" style={{ backgroundColor: "#064E3B", color: "#FFFFFF" }}>{state.success}</p>
   )}
   {draftState.error && <p role="alert" className="mt-3 rounded-lg bg-red-100 p-3 text-xs text-red-800">{draftState.error}</p>}
-  {draftState.success && <p role="status" className="mt-3 rounded-lg bg-emerald-100 p-3 text-xs text-emerald-800">{draftState.success}</p>}
+  {draftState.success && draftOrderId && <p role="status" className="mt-3 rounded-lg bg-emerald-100 p-3 text-xs text-emerald-800">{draftState.success}</p>}
   <button type="submit" formAction={draftFormAction} disabled={draftPending || pending || !idempotencyKey || cart.length === 0 || total <= 0} className="mt-4 min-h-12 w-full rounded-xl border border-white/40 bg-white px-4 text-sm font-bold text-forest-800 disabled:opacity-50">{draftPending ? "Saving draft..." : draftOrderId ? "Update draft order" : "Save as draft order"}</button>
+  <p className="mt-1 text-center text-[10px] text-emerald-100">Saving a draft does not record payments, create a receipt or reserve stock.</p>
   {
 <button
   type="submit"
