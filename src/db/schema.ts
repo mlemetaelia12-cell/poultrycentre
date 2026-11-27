@@ -227,7 +227,7 @@ export const draftOrderItems = pgTable("draft_order_items", {
   baseQuantity: numeric("base_quantity", { precision: 14, scale: 3 }).notNull(),
   unitPrice: numeric("unit_price", { precision: 14, scale: 2 }).notNull(),
   lineTotal: numeric("line_total", { precision: 14, scale: 2 }).notNull(),
-});
+}, (t) => ({ orderIdx: index("draft_order_items_order_idx").on(t.draftOrderId) }));
 
 export const saleItems = pgTable("sale_items", {
   id: uuid("id").defaultRandom().primaryKey(),
