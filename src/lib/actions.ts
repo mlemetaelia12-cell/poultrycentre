@@ -455,7 +455,7 @@ export async function createSaleAction(_previous: ActionState, formData: FormDat
       await tx.update(operationRequests).set({ entityType: "sale", entityId: sale.id }).where(eq(operationRequests.id, claim.id));
       return { duplicate: false as const, entityId: sale.id };
     });
-    revalidatePath("/sales"); revalidatePath("/sales/history"); revalidatePath("/inventory"); revalidatePath("/debts"); revalidatePath("/dashboard"); revalidatePath("/reports");
+    revalidatePath("/sales"); revalidatePath("/sales/history"); revalidatePath("/sales/drafts"); revalidatePath("/inventory"); revalidatePath("/debts"); revalidatePath("/dashboard"); revalidatePath("/reports");
     return { success: operation.duplicate ? "This sale was already completed. No second sale was created." : "Sale completed. Open Receipts to print or save a copy." };
   } catch (error) { return { error: error instanceof Error ? error.message : "Sale could not be completed." }; }
 }
