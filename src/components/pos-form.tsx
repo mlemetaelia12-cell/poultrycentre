@@ -2,7 +2,7 @@
 
 import { useActionState, useEffect, useMemo, useState } from "react";
 import type { ActionState } from "@/lib/actions";
-import { createSaleAction } from "@/lib/actions";
+import { createSaleAction, saveDraftOrderAction } from "@/lib/actions";
 import { money } from "@/lib/format";
 
 type Unit = { unitName: string; barcode: string | null; baseQuantity: string; retailPrice: string | null; wholesalePrice: string | null };
@@ -13,8 +13,12 @@ type Payment = { method: string; amount: string; reference: string };
 
 const paymentOptions = [{ value: "cash", label: "Cash" }, { value: "mpesa", label: "M-Pesa" }, { value: "mixx", label: "Mixx by Yas" }, { value: "airtel_money", label: "Airtel Money" }, { value: "halopesa", label: "HaloPesa" }, { value: "bank_transfer", label: "Bank transfer" }];
 
-export function PosForm({ products, customers }: { products: Product[]; customers: Customer[] }) {
+type InitialDraft = { id: string; customerId: string | null; customerName: string | null; customerPhone: string | null; deliveryLocation: string | null; saleType: "retail" | "wholesale"; discount: string; notes: string | null; items: CartLine[] };
+
+export function PosForm({ products, customers, initialDraft }: { products: Product[]; customers: Customer[]; initialDraft?: InitialDraft | null }) {
   const [state, formAction, pending] = useActionState(createSaleAction, {} as ActionState);
+  const [draftState, draftFormAction, draftPending] = useActionState(saveDraftOrderAction, {} as ActionState);
+  const [draftOrderId, setDraftOrderId] = useState(initialDraft?.id ?? "");
   const [idempotencyKey, setIdempotencyKey] = useState("");
   useEffect(() => { if (!idempotencyKey) setIdempotencyKey(crypto.randomUUID()); }, [idempotencyKey]);
   useEffect(() => {
@@ -25,7 +29,8 @@ export function PosForm({ products, customers }: { products: Product[]; customer
     setNotes("");
     setIdempotencyKey(crypto.randomUUID());
   }, [state.success]);
-  const [saleType, setSaleType] = useState<"retail" | "wholesale">("retail");
+  useEffect(() => { if (draftState.draftOrderId) setDraftOrderId(draftState.draftOrderId); }, [draftState.draftOrderId]);
+  const [saleType, setSaleType] = useState<"retail" | "wholesale">(initialDraft?.saleType ?? "retail");
   const [productId, setProductId] = useState(products[0]?.id ?? "");
   const [productSearch, setProductSearch] = useState("");
   const matchingProducts = useMemo(() => {
@@ -51,12 +56,15 @@ export function PosForm({ products, customers }: { products: Product[]; customer
   const basePrice = Number((saleType === "retail" ? selected?.retailPrice : selected?.wholesalePrice) ?? 0);
   const price = Number(defaultPrice ?? basePrice * factor);
   const [quantity, setQuantity] = useState("1");
-  const [cart, setCart] = useState<CartLine[]>([]);
-  const [customerId, setCustomerId] = useState("");
+  const [cart, setCart] = useState<CartLine[]>(initialDraft?.items ?? []);
+  const [customerId, setCustomerId] = useState(initialDraft?.customerId ?? "");
+  const [customerName, setCustomerName] = useState(initialDraft?.customerName ?? "");
+  const [customerPhone, setCustomerPhone] = useState(initialDraft?.customerPhone ?? "");
+  const [deliveryLocation, setDeliveryLocation] = useState(initialDraft?.deliveryLocation ?? "");
   const [dueDate, setDueDate] = useState("");
-  const [discount, setDiscount] = useState("0");
+  const [discount, setDiscount] = useState(initialDraft?.discount ?? "0");
   const [payments, setPayments] = useState<Payment[]>([{ method: "cash", amount: "", reference: "" }]);
-  const [notes, setNotes] = useState("");
+  const [notes, setNotes] = useState(initialDraft?.notes ?? "");
   const subtotal = useMemo(() => cart.reduce((sum, line) => sum + Math.round(line.quantity * line.unitPrice * 100), 0) / 100, [cart]);
   const total = Math.max(0, subtotal - Math.max(0, Number(discount) || 0));
   const paid = payments.reduce((sum, item) => sum + Math.max(0, Number(item.amount) || 0), 0);
@@ -79,6 +87,8 @@ export function PosForm({ products, customers }: { products: Product[]; customer
 
   return <form action={formAction} className="min-w-0 space-y-5">
     <input type="hidden" name="idempotencyKey" value={idempotencyKey} />
+    <input type="hidden" name="draftOrderId" value={draftOrderId} />
+    <input type="hidden" name="customerName" value={customerName} /><input type="hidden" name="customerPhone" value={customerPhone} /><input type="hidden" name="deliveryLocation" value={deliveryLocation} />
     <input type="hidden" name="items" value={JSON.stringify(cart.map(({ productId, quantity, unitName, unitPrice }) => ({ productId, quantity, unitName, unitPrice })))} />
     <input type="hidden" name="payments" value={JSON.stringify(payments.filter((p) => Number(p.amount) > 0).map((p) => ({ method: p.method, amount: Number(p.amount), reference: p.reference })))} />
     <input type="hidden" name="saleType" value={saleType} /><input type="hidden" name="customerId" value={customerId} /><input type="hidden" name="dueDate" value={dueDate} /><input type="hidden" name="discount" value={discount} /><input type="hidden" name="notes" value={notes} />
@@ -97,7 +107,9 @@ export function PosForm({ products, customers }: { products: Product[]; customer
         </tbody></table></div>
       </div>
       <div className="space-y-4">
-        <section className="card p-4"><h2 className="section-title">Customer & payment</h2><div className="mt-4 space-y-3"><div><label className="field-label">Customer (required for credit)</label><select className="field" value={customerId} onChange={(e) => setCustomerId(e.target.value)}><option value="">Walk-in customer / no credit</option>{customers.map((customer) => <option key={customer.id} value={customer.id}>{customer.name}{customer.phone ? ` · ${customer.phone}` : ""}</option>)}</select></div>{selectedCustomer && <p className="rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-600">Customer credit limit: <strong>{money(selectedCustomer.creditLimit)}</strong></p>}
+        <section className="card p-4"><h2 className="section-title">Customer & payment</h2><div className="mt-4 space-y-3"><div><label className="field-label">Customer (required for credit)</label><select className="field" value={customerId} onChange={(e) => setCustomerId(e.target.value)}><option value="">Walk-in customer / no credit</option>{customers.map((customer) => <option key={customer.id} value={customer.id}>{customer.name}{customer.phone ? ` · ${customer.phone}` : ""}</option>)}</select></div>
+          <div className="grid gap-2 sm:grid-cols-2"><div><label className="field-label">Customer name (optional for walk-in)</label><input className="field" value={customerName} onChange={(e) => setCustomerName(e.target.value)} maxLength={180} placeholder="Customer / company name" /></div><div><label className="field-label">Customer phone</label><input className="field" value={customerPhone} onChange={(e) => setCustomerPhone(e.target.value)} maxLength={32} placeholder="Phone number" /></div></div>
+          <div><label className="field-label">Delivery location / destination</label><textarea className="field" rows={2} value={deliveryLocation} onChange={(e) => setDeliveryLocation(e.target.value)} maxLength={1000} placeholder="Where should this order be delivered?" /></div>{selectedCustomer && <p className="rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-600">Customer credit limit: <strong>{money(selectedCustomer.creditLimit)}</strong></p>}
           <div className="flex items-center justify-between"><h3 className="text-xs font-bold text-slate-700">Split payments</h3><button type="button" onClick={() => setPayments((current) => [...current, { method: "mpesa", amount: "", reference: "" }])} className="text-xs font-semibold text-forest-700">+ Add payment</button></div>
           {payments.map((payment, index) => <div key={index} className="grid grid-cols-[1fr_1fr_auto] gap-2"><select className="field" value={payment.method} onChange={(e) => setPayments((current) => current.map((p, i) => i === index ? { ...p, method: e.target.value } : p))}>{paymentOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select><input className="field" type="number" min="0" step="0.01" placeholder="Amount" value={payment.amount} onChange={(e) => setPayments((current) => current.map((p, i) => i === index ? { ...p, amount: e.target.value } : p))} /><button type="button" aria-label="Remove payment" onClick={() => setPayments((current) => current.filter((_, i) => i !== index))} className="px-2 text-xs text-red-600">×</button><input className="field col-span-3" placeholder="Payment reference (optional)" value={payment.reference} onChange={(e) => setPayments((current) => current.map((p, i) => i === index ? { ...p, reference: e.target.value } : p))} /></div>)}
           {due > 0 && <div><label className="field-label">Credit due date (optional)</label><input className="field" type="date" min={new Date().toLocaleDateString("en-CA", { timeZone: "Africa/Dar_es_Salaam" })} value={dueDate} onChange={(e) => setDueDate(e.target.value)} /><p className="mt-1 text-[10px] text-slate-500">Set when the customer should clear the outstanding balance.</p></div>}
@@ -154,15 +166,11 @@ export function PosForm({ products, customers }: { products: Product[]; customer
   )}
 
   {state.success && (
-    <p
-      role="status"
-      className="mt-4 rounded-lg p-3 text-xs"
-      style={{ backgroundColor: "#064E3B", color: "#FFFFFF" }}
-    >
-      {state.success}
-    </p>
+    <p role="status" className="mt-4 rounded-lg p-3 text-xs" style={{ backgroundColor: "#064E3B", color: "#FFFFFF" }}>{state.success}</p>
   )}
-
+  {draftState.error && <p role="alert" className="mt-3 rounded-lg bg-red-100 p-3 text-xs text-red-800">{draftState.error}</p>}
+  {draftState.success && <p role="status" className="mt-3 rounded-lg bg-emerald-100 p-3 text-xs text-emerald-800">{draftState.success}</p>}
+  <button type="submit" formAction={draftFormAction} disabled={draftPending || pending || !idempotencyKey || cart.length === 0 || total <= 0} className="mt-4 min-h-12 w-full rounded-xl border border-white/40 bg-white px-4 text-sm font-bold text-forest-800 disabled:opacity-50">{draftPending ? "Saving draft..." : draftOrderId ? "Update draft order" : "Save as draft order"}</button>
   {
 <button
   type="submit"
