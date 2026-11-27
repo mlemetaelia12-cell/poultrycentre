@@ -15,7 +15,7 @@ export default async function SalesPage({ searchParams }: { searchParams: Promis
   const db = getDb();
   const actor = await requireUser();
   const params = await searchParams;
-  const requestedDraftId = params.draftId ?? "";
+  const requestedDraftId = params.draftId && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(params.draftId) ? params.draftId : "";
   const [productRows, conversionRows, customerRows, saleRows, openShift] = await Promise.all([
     db.select().from(products).where(eq(products.active, true)).orderBy(products.name),
     db.select().from(unitConversions),
