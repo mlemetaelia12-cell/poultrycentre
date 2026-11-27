@@ -27,6 +27,12 @@ export function PosForm({ products, customers, initialDraft }: { products: Produ
     setPayments([{ method: "cash", amount: "", reference: "" }]);
     setDiscount("0");
     setNotes("");
+    setDraftOrderId("");
+    setCustomerId("");
+    setCustomerName("");
+    setCustomerPhone("");
+    setDeliveryLocation("");
+    setDueDate("");
     setIdempotencyKey(crypto.randomUUID());
   }, [state.success]);
   useEffect(() => { if (draftState.draftOrderId) setDraftOrderId(draftState.draftOrderId); }, [draftState.draftOrderId]);
