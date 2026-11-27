@@ -321,7 +321,11 @@ export async function createSaleAction(_previous: ActionState, formData: FormDat
   const discount = safeNumber(formData.get("discount"), 0);
   if (discount < 0 || discount > 999999999) return { error: "Discount amount is invalid." };
   if (discount > 0 && actor.role !== "owner" && actor.role !== "manager") return { error: "Only an owner or manager can approve a sale discount." };
-  const notes = safeText(formData.get("notes"), 1000);
+  const baseNotes = safeText(formData.get("notes"), 1000);
+  const customerNameSnapshot = safeText(formData.get("customerName"), 180);
+  const customerPhoneSnapshot = safeText(formData.get("customerPhone"), 32);
+  const deliveryLocation = safeText(formData.get("deliveryLocation"), 1000);
+  const notes = [baseNotes, customerNameSnapshot ? `Order contact: ${customerNameSnapshot}` : "", customerPhoneSnapshot ? `Contact phone: ${customerPhoneSnapshot}` : "", deliveryLocation ? `Delivery destination: ${deliveryLocation}` : ""].filter(Boolean).join("\n").slice(0, 2000);
   const fingerprint = sha256(JSON.stringify({ actorId: actor.id, lines, paymentLines, customerId, dueDate, saleType, discount, notes, draftOrderId }));
 
   try {
