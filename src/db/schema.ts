@@ -359,3 +359,40 @@ export const taxRecords = pgTable("tax_records", {
   fiscalReference: varchar("fiscal_reference", { length: 120 }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+// DRAFT ORDERS TABLES
+
+export const draftOrders = pgTable("draft_orders", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  orderNumber: varchar("order_number", { length: 40 }).notNull(),
+  customerId: uuid("customer_id").references(() => customers.id, { onDelete: "set null" }),
+  customerName: varchar("customer_name", { length: 180 }),
+  customerPhone: varchar("customer_phone", { length: 32 }),
+  deliveryLocation: text("delivery_location"),
+  saleType: varchar("sale_type", { length: 16 }).notNull().default("retail"),
+  discount: numeric("discount", { precision: 14, scale: 2 }).notNull().default("0"),
+  notes: text("notes"),
+  status: varchar("status", { length: 16 }).notNull().default("draft"),
+  convertedSaleId: uuid("converted_sale_id").references(() => sales.id, { onDelete: "set null" }),
+  createdBy: uuid("created_by").notNull().references(() => users.id),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  orderNumberUq: uniqueIndex("draft_orders_order_number_uq").on(t.orderNumber),
+  statusCreatedIdx: index("draft_orders_status_created_idx").on(t.status, t.createdAt),
+  creatorIdx: index("draft_orders_creator_idx").on(t.createdBy),
+}));
+
+export const draftOrderItems = pgTable("draft_order_items", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  draftOrderId: uuid("draft_order_id").notNull().references(() => draftOrders.id, { onDelete: "cascade" }),
+  productId: uuid("product_id").notNull().references(() => products.id, { onDelete: "restrict" }),
+  productName: varchar("product_name", { length: 180 }).notNull(),
+  unitName: varchar("unit_name", { length: 32 }).notNull(),
+  quantity: numeric("quantity", { precision: 14, scale: 3 }).notNull(),
+  baseQuantity: numeric("base_quantity", { precision: 14, scale: 3 }).notNull(),
+  unitPrice: numeric("unit_price", { precision: 14, scale: 2 }).notNull(),
+  lineTotal: numeric("line_total", { precision: 14, scale: 2 }).notNull(),
+}, (t) => ({
+  orderIdx: index("draft_order_items_order_idx").on(t.draftOrderId),
+}));
