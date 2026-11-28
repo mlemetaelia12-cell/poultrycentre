@@ -1,4 +1,4 @@
-"use server";
+﻿"use server";
 
 import "server-only";
 import argon2 from "argon2";
@@ -453,6 +453,46 @@ const fingerprint = sha256(JSON.stringify({
         if (!draft || draft.status !== "draft") throw new Error("This draft order is no longer available.");
         if (draft.createdBy !== actor.id && actor.role !== "owner" && actor.role !== "manager") {
           throw new Error("You can only complete your own draft orders.");
+        }
+
+        const savedItems = await tx.select().from(draftOrderItems)
+          .where(eq(draftOrderItems.draftOrderId, draft.id))
+          .for("update");
+
+        const normalizeItems = (items: Array<{ productId: string; unitName: string; quantity: number; unitPrice: number }>) =>
+          items.map((item) => ({
+            productId: item.productId,
+            unitName: item.unitName,
+            quantity: Math.round(item.quantity * 1000),
+            unitPrice: toCents(item.unitPrice),
+          })).sort((a, b) =>
+            `${a.productId}:${a.unitName}:${a.quantity}:${a.unitPrice}`.localeCompare(
+              `${b.productId}:${b.unitName}:${b.quantity}:${b.unitPrice}`
+            )
+          );
+
+        const savedNormalized = normalizeItems(savedItems.map((item) => ({
+          productId: item.productId,
+          unitName: item.unitName,
+          quantity: Number(item.quantity),
+          unitPrice: Number(item.unitPrice),
+        })));
+
+        const submittedNormalized = normalizeItems(lines.map((line) => ({
+          productId: line.productId,
+          unitName: line.unitName,
+          quantity: line.quantity,
+          unitPrice: line.unitPrice,
+        })));
+
+        if (
+          JSON.stringify(savedNormalized) !== JSON.stringify(submittedNormalized) ||
+          (draft.customerId ?? "") !== (customerId || "") ||
+          draft.saleType !== saleType ||
+          toCents(Number(draft.discount)) !== toCents(discount) ||
+          (draft.notes ?? "") !== notes
+        ) {
+          throw new Error("Draft details have changed. Reload the saved draft and review it before checkout.");
         }
       }
 
@@ -1033,3 +1073,5 @@ export async function setStaffActiveAction(formData: FormData) {
   });
   revalidatePath("/staff");
 }
+
+

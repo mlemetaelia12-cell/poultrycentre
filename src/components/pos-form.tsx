@@ -1,8 +1,8 @@
-"use client";
+﻿"use client";
 
 import { useActionState, useEffect, useMemo, useState } from "react";
 import type { ActionState } from "@/lib/actions";
-import { createSaleAction } from "@/lib/actions";
+import { createSaleAction, saveDraftOrderAction } from "@/lib/actions";
 import { money } from "@/lib/format";
 import type { Locale } from "@/i18n/messages";
 import { t } from "@/i18n/messages";
@@ -12,11 +12,22 @@ type Product = { id: string; sku: string; barcode: string | null; name: string; 
 type Customer = { id: string; name: string; phone: string | null; creditLimit: string };
 type CartLine = { productId: string; productName: string; unitName: string; quantity: number; unitPrice: number; baseQuantity: number };
 type Payment = { method: string; amount: string; reference: string };
+type InitialDraft = {
+  id: string;
+  customerId: string | null;
+  saleType: "retail" | "wholesale";
+  discount: string;
+  notes: string;
+  items: CartLine[];
+};
 
 const paymentOptions = [{ value: "cash", en: "Cash", sw: "Taslimu" }, { value: "mpesa", en: "M-Pesa", sw: "M-Pesa" }, { value: "mixx", en: "Mixx by Yas", sw: "Mixx by Yas" }, { value: "airtel_money", en: "Airtel Money", sw: "Airtel Money" }, { value: "halopesa", en: "HaloPesa", sw: "HaloPesa" }, { value: "bank_transfer", en: "Bank transfer", sw: "Benki" }];
 
-export function PosForm({ products, customers, locale = "en" }: { products: Product[]; customers: Customer[]; locale?: Locale }) {
+export function PosForm({ products, customers, locale = "en", initialDraft }: { products: Product[]; customers: Customer[]; locale?: Locale; initialDraft?: InitialDraft }) {
   const [state, formAction, pending] = useActionState(createSaleAction, {} as ActionState);
+  const [draftState, draftFormAction, draftPending] = useActionState(saveDraftOrderAction, {} as ActionState);
+  const [draftOrderId, setDraftOrderId] = useState("");
+  useEffect(() => { if (draftState.draftOrderId) setDraftOrderId(draftState.draftOrderId); }, [draftState.draftOrderId]);
   const [idempotencyKey, setIdempotencyKey] = useState("");
   useEffect(() => { if (!idempotencyKey) setIdempotencyKey(crypto.randomUUID()); }, [idempotencyKey]);
   useEffect(() => {
@@ -63,6 +74,17 @@ const [approverUsername, setApproverUsername] = useState("");
 const [approverPassword, setApproverPassword] = useState("");
   const [payments, setPayments] = useState<Payment[]>([{ method: "cash", amount: "", reference: "" }]);
   const [notes, setNotes] = useState("");
+  useEffect(() => {
+    if (!initialDraft) return;
+    setDraftOrderId(initialDraft.id);
+    setCart(initialDraft.items);
+    setCustomerId(initialDraft.customerId ?? "");
+    setSaleType(initialDraft.saleType);
+    setDiscount(initialDraft.discount);
+    setNotes(initialDraft.notes);
+    setPayments([{ method: "cash", amount: "", reference: "" }]);
+    setDueDate("");
+  }, [initialDraft]);
   const subtotal = useMemo(() => cart.reduce((sum, line) => sum + Math.round(line.quantity * line.unitPrice * 100), 0) / 100, [cart]);
   const total = Math.max(0, subtotal - Math.max(0, Number(discount) || 0));
   const paid = payments.reduce((sum, item) => sum + Math.max(0, Number(item.amount) || 0), 0);
@@ -86,6 +108,7 @@ const [approverPassword, setApproverPassword] = useState("");
 
   return <form action={formAction} className="min-w-0 space-y-5">
     <input type="hidden" name="idempotencyKey" value={idempotencyKey} />
+    <input type="hidden" name="draftOrderId" value={draftOrderId} />
     <input type="hidden" name="items" value={JSON.stringify(cart.map(({ productId, quantity, unitName, unitPrice }) => ({ productId, quantity, unitName, unitPrice })))} />
     <input type="hidden" name="payments" value={JSON.stringify(payments.filter((p) => Number(p.amount) > 0).map((p) => ({ method: p.method, amount: Number(p.amount), reference: p.reference })))} />
     <input type="hidden" name="saleType" value={saleType} /><input type="hidden" name="customerId" value={customerId} /><input type="hidden" name="dueDate" value={dueDate} /><input type="hidden" name="discount" value={discount} /><input type="hidden" name="notes" value={notes} />
@@ -93,20 +116,20 @@ const [approverPassword, setApproverPassword] = useState("");
       <div className="space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-2"><div><h2 className="section-title">{sw ? "Tengeneza mauzo" : "Build sale"}</h2><p className="section-subtitle">{sw ? "Tafuta bidhaa au scan barcode, kisha ongeza kwenye oda." : "Find a product or scan its barcode, then add it to the order."}</p></div><div className="inline-flex rounded-xl bg-slate-100 p-1"><button type="button" onClick={() => changeSaleType("retail")} className={`rounded-lg px-4 py-2 text-xs font-semibold ${saleType === "retail" ? "bg-white text-forest-800 shadow-sm" : "text-slate-500"}`}>{sw ? "Bei ya rejareja" : "Retail"}</button><button type="button" onClick={() => changeSaleType("wholesale")} className={`rounded-lg px-4 py-2 text-xs font-semibold ${saleType === "wholesale" ? "bg-white text-forest-800 shadow-sm" : "text-slate-500"}`}>{sw ? "Bei ya jumla" : "Wholesale"}</button></div></div>
         <div className="card grid gap-3 p-4 sm:grid-cols-[2fr_1fr_1fr_auto] sm:items-end">
-          <div className="min-w-0"><label className="field-label" htmlFor="pos-product-search">{sw ? "Tafuta bidhaa au scan barcode/SKU *" : "Find product or scan barcode/SKU *"}</label><input id="pos-product-search" className="field mb-2" type="search" value={productSearch} onChange={(event) => setProductSearch(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); selectScannedProduct(productSearch); } }} placeholder={sw ? "Andika jina, SKU au scan barcode" : "Type product, SKU or scan barcode"} /><select className="field" value={productId} onChange={(event) => { const next = products.find((item) => item.id === event.target.value); setProductId(event.target.value); setUnitName(next?.baseUnit ?? "piece"); setProductSearch(""); }}><option value="">{sw ? "Chagua bidhaa" : "Select product"}</option>{matchingProducts.map((product) => <option key={product.id} value={product.id}>{product.name} · {product.sku}</option>)}{!matchingProducts.length && <option value="" disabled>{sw ? "Hakuna bidhaa iliyopatikana" : "No matching product"}</option>}</select></div>
+          <div className="min-w-0"><label className="field-label" htmlFor="pos-product-search">{sw ? "Tafuta bidhaa au scan barcode/SKU *" : "Find product or scan barcode/SKU *"}</label><input id="pos-product-search" className="field mb-2" type="search" value={productSearch} onChange={(event) => setProductSearch(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); selectScannedProduct(productSearch); } }} placeholder={sw ? "Andika jina, SKU au scan barcode" : "Type product, SKU or scan barcode"} /><select className="field" value={productId} onChange={(event) => { const next = products.find((item) => item.id === event.target.value); setProductId(event.target.value); setUnitName(next?.baseUnit ?? "piece"); setProductSearch(""); }}><option value="">{sw ? "Chagua bidhaa" : "Select product"}</option>{matchingProducts.map((product) => <option key={product.id} value={product.id}>{product.name} Â· {product.sku}</option>)}{!matchingProducts.length && <option value="" disabled>{sw ? "Hakuna bidhaa iliyopatikana" : "No matching product"}</option>}</select></div>
           <div><label className="field-label">{sw ? "Kipimo" : "Unit"}</label><select className="field" value={unitName} onChange={(e) => setUnitName(e.target.value)} disabled={!selected}><option value={selected?.baseUnit}>{selected?.baseUnit}</option>{selected?.units.map((unit) => <option key={unit.unitName} value={unit.unitName}>{unit.unitName} ({unit.baseQuantity} base units)</option>)}</select></div>
           <div><label className="field-label">{sw ? "Idadi" : "Quantity"}</label><input className="field" type="number" min="0.001" step="0.001" value={quantity} onChange={(e) => setQuantity(e.target.value)} /></div>
           <button type="button" onClick={addLine} disabled={!selected || price <= 0} className="min-h-11 rounded-xl bg-forest-700 px-4 text-sm font-semibold text-white disabled:opacity-50">{sw ? "Ongeza bidhaa" : "Add item"}</button>
-          <div className="sm:col-span-4"><p className="text-[11px] text-slate-500">{sw ? "Bei ya kipimo:" : "Configured unit price:"} <strong className="text-slate-800">{money(price)}</strong> · {sw ? "Stoo inayotumika kwa kipimo:" : "Base stock required per selected unit:"} {factor}</p></div>
+          <div className="sm:col-span-4"><p className="text-[11px] text-slate-500">{sw ? "Bei ya kipimo:" : "Configured unit price:"} <strong className="text-slate-800">{money(price)}</strong> Â· {sw ? "Stoo inayotumika kwa kipimo:" : "Base stock required per selected unit:"} {factor}</p></div>
         </div>
         <div className="table-wrap min-w-0 max-w-full"><table className="data-table"><thead><tr><th>{sw ? "Bidhaa" : "Product"}</th><th>{sw ? "Kipimo" : "Unit"}</th><th>{sw ? "Idadi" : "Qty"}</th><th>{sw ? "Bei" : "Unit price"}</th><th>{sw ? "Jumla" : "Total"}</th><th /></tr></thead><tbody>
           {cart.length ? cart.map((line, index) => <tr key={`${line.productId}-${line.unitName}-${index}`}><td className="font-semibold">{line.productName}</td><td>{line.unitName}</td><td>{line.quantity}</td><td>{money(line.unitPrice)}</td><td className="font-semibold">{money(line.quantity * line.unitPrice)}</td><td><button type="button" onClick={() => setCart((current) => current.filter((_, i) => i !== index))} className="text-xs font-semibold text-red-600">{sw ? "Ondoa" : "Remove"}</button></td></tr>) : <tr><td colSpan={6} className="py-12 text-center text-sm text-slate-400">{sw ? "Oda bado haina bidhaa. Ongeza angalau bidhaa moja." : "Basket is empty. Add at least one product."}</td></tr>}
         </tbody></table></div>
       </div>
       <div className="space-y-4">
-        <section className="card p-4"><h2 className="section-title">{sw ? "Mteja na malipo" : "Customer & payment"}</h2><div className="mt-4 space-y-3"><div><label className="field-label">{sw ? "Mteja (lazima kwa mauzo ya deni)" : "Customer (required for credit)"}</label><select className="field" value={customerId} onChange={(e) => setCustomerId(e.target.value)}><option value="">{sw ? "Mteja wa kawaida / hakuna deni" : "Walk-in customer / no credit"}</option>{customers.map((customer) => <option key={customer.id} value={customer.id}>{customer.name}{customer.phone ? ` · ${customer.phone}` : ""}</option>)}</select></div>{selectedCustomer && <p className="rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-600">{sw ? "Kikomo cha deni la mteja:" : "Customer credit limit:"} <strong>{money(selectedCustomer.creditLimit)}</strong></p>}
+        <section className="card p-4"><h2 className="section-title">{sw ? "Mteja na malipo" : "Customer & payment"}</h2><div className="mt-4 space-y-3"><div><label className="field-label">{sw ? "Mteja (lazima kwa mauzo ya deni)" : "Customer (required for credit)"}</label><select className="field" value={customerId} onChange={(e) => setCustomerId(e.target.value)}><option value="">{sw ? "Mteja wa kawaida / hakuna deni" : "Walk-in customer / no credit"}</option>{customers.map((customer) => <option key={customer.id} value={customer.id}>{customer.name}{customer.phone ? ` Â· ${customer.phone}` : ""}</option>)}</select></div>{selectedCustomer && <p className="rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-600">{sw ? "Kikomo cha deni la mteja:" : "Customer credit limit:"} <strong>{money(selectedCustomer.creditLimit)}</strong></p>}
           <div className="flex items-center justify-between"><h3 className="text-xs font-bold text-slate-700">{sw ? "Gawa malipo" : "Split payments"}</h3><button type="button" onClick={() => setPayments((current) => [...current, { method: "mpesa", amount: "", reference: "" }])} className="text-xs font-semibold text-forest-700">{sw ? "+ Ongeza malipo" : "+ Add payment"}</button></div>
-          {payments.map((payment, index) => <div key={index} className="grid grid-cols-[1fr_1fr_auto] gap-2"><select className="field" value={payment.method} onChange={(e) => setPayments((current) => current.map((p, i) => i === index ? { ...p, method: e.target.value } : p))}>{paymentOptions.map((option) => <option key={option.value} value={option.value}>{sw ? option.sw : option.en}</option>)}</select><input className="field" type="number" min="0" step="0.01" placeholder={sw ? "Kiasi" : "Amount"} value={payment.amount} onChange={(e) => setPayments((current) => current.map((p, i) => i === index ? { ...p, amount: e.target.value } : p))} /><button type="button" aria-label="Remove payment" onClick={() => setPayments((current) => current.filter((_, i) => i !== index))} className="px-2 text-xs text-red-600">×</button><input className="field col-span-3" placeholder={sw ? "Namba ya muamala (si lazima)" : "Payment reference (optional)"} value={payment.reference} onChange={(e) => setPayments((current) => current.map((p, i) => i === index ? { ...p, reference: e.target.value } : p))} /></div>)}
+          {payments.map((payment, index) => <div key={index} className="grid grid-cols-[1fr_1fr_auto] gap-2"><select className="field" value={payment.method} onChange={(e) => setPayments((current) => current.map((p, i) => i === index ? { ...p, method: e.target.value } : p))}>{paymentOptions.map((option) => <option key={option.value} value={option.value}>{sw ? option.sw : option.en}</option>)}</select><input className="field" type="number" min="0" step="0.01" placeholder={sw ? "Kiasi" : "Amount"} value={payment.amount} onChange={(e) => setPayments((current) => current.map((p, i) => i === index ? { ...p, amount: e.target.value } : p))} /><button type="button" aria-label="Remove payment" onClick={() => setPayments((current) => current.filter((_, i) => i !== index))} className="px-2 text-xs text-red-600">Ã—</button><input className="field col-span-3" placeholder={sw ? "Namba ya muamala (si lazima)" : "Payment reference (optional)"} value={payment.reference} onChange={(e) => setPayments((current) => current.map((p, i) => i === index ? { ...p, reference: e.target.value } : p))} /></div>)}
           {due > 0 && <div><label className="field-label">{sw ? "Tarehe ya kulipa deni (si lazima)" : "Credit due date (optional)"}</label><input className="field" type="date" min={new Date().toLocaleDateString("en-CA", { timeZone: "Africa/Dar_es_Salaam" })} value={dueDate} onChange={(e) => setDueDate(e.target.value)} /><p className="mt-1 text-[10px] text-slate-500">{sw ? "Weka tarehe ambayo mteja anatarajiwa kulipa deni." : "Set when the customer should clear the outstanding balance."}</p></div>}
           <div>
   <label className="field-label">
@@ -176,7 +199,7 @@ const [approverPassword, setApproverPassword] = useState("");
 
   <div className="mt-2 flex justify-between text-sm">
     <span style={{ color: "#D1FAE5" }}>{sw ? "Punguzo" : "Discount"}</span>
-    <span style={{ color: "#FFFFFF" }}>− {money(discount)}</span>
+    <span style={{ color: "#FFFFFF" }}>âˆ’ {money(discount)}</span>
   </div>
 
   <div className="mt-4 border-t border-white/20 pt-4">
@@ -200,6 +223,13 @@ const [approverPassword, setApproverPassword] = useState("");
     </div>
   </div>
 
+  {draftState.error && (
+    <p role="alert" className="mt-3 rounded-lg bg-red-100 p-3 text-xs text-red-800">{draftState.error}</p>
+  )}
+  {draftState.success && (
+    <p role="status" className="mt-3 rounded-lg bg-emerald-100 p-3 text-xs text-emerald-800">{draftState.success}</p>
+  )}
+
   {state.error && (
     <p
       role="alert"
@@ -220,7 +250,16 @@ const [approverPassword, setApproverPassword] = useState("");
     </p>
   )}
 
-  {
+  <>
+<button
+  type="submit"
+  formAction={draftFormAction}
+  disabled={draftPending || cart.length === 0 || total <= 0}
+  className="mt-4 block min-h-11 w-full rounded-xl border border-white/40 bg-white px-4 text-sm font-bold text-forest-800 disabled:opacity-50"
+>
+  {draftPending ? (sw ? "Inahifadhi oda..." : "Saving draft...") : (sw ? "Hifadhi oda (Save Draft)" : "Save Draft")}
+</button>
+
 <button
   type="submit"
   disabled={
@@ -248,10 +287,10 @@ const [approverPassword, setApproverPassword] = useState("");
   {pending
     ? (sw ? "Inakamilisha mauzo..." : "Processing sale...")
     : due > 0
-      ? (sw ? "Kamilisha mauzo · Rekodi deni" : "Complete sale · Record balance")
+      ? (sw ? "Kamilisha mauzo Â· Rekodi deni" : "Complete sale Â· Record balance")
       : (sw ? "Kamilisha mauzo" : "Complete sale")}
 </button>
-}
+</>
 
   <p
     className="mt-3 text-center text-[10px] leading-4"
@@ -265,3 +304,7 @@ const [approverPassword, setApproverPassword] = useState("");
     </div>
   </form>;
 }
+
+
+
+
